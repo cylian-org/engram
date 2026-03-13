@@ -1,0 +1,666 @@
+"""
+Knowledge Base — Markdown files + Xapian full-text index.
+
+Manages entries stored as Markdown files with YAML frontmatter. Each entry
+has a UUID, title, tags list, and content body. A Xapian index provides
+full-text search with French stemming.
+
+Source of truth: the Markdown files. The Xapian index is a rebuildable cache.
+"""
+
+from __future__ import annotations
+
+import logging
+import uuid
+from difflib import SequenceMatcher
+from pathlib import Path
+from typing import Any
+
+import xapian
+import yaml
+
+logger = logging.getLogger("mcp-kb")
+
+# ---------------------------------------------------------------------------
+# Xapian prefix constants
+# ---------------------------------------------------------------------------
+
+PREFIX_ID: str = "Q"
+PREFIX_TITLE: str = "XTITLE"
+PREFIX_TAG: str = "XTAG"
+
+# Weighting slots
+SLOT_TITLE: int = 0
+
+# Default search limit
+DEFAULT_SEARCH_LIMIT: int = 10
+DEFAULT_LIST_LIMIT: int = 50
+
+# Duplicate detection threshold (SequenceMatcher ratio, 0.0-1.0)
+DUPLICATE_THRESHOLD: float = 0.75
+
+
+class KnowledgeBase:
+    """
+    Knowledge base backed by Markdown files and a Xapian index.
+
+    Args:
+        data_path: Root path for knowledge data (contains entries/ and index/).
+    """
+
+    def __init__(self, data_path: str) -> None:
+        """
+        Initialize the knowledge base.
+
+        Args:
+            data_path: Root directory for knowledge storage.
+
+        Errors:
+            Creates entries/ and index/ subdirectories if missing.
+        """
+
+        self._data_path = Path(data_path)
+        self._entries_path = self._data_path / "entries"
+        self._index_path = self._data_path / "index" / "fr"
+
+        # Ensure directories exist
+        self._entries_path.mkdir(parents=True, exist_ok=True)
+        self._index_path.mkdir(parents=True, exist_ok=True)
+
+        logger.info(
+            "KnowledgeBase initialized — entries: %s, index: %s",
+            self._entries_path,
+            self._index_path,
+        )
+
+    # -----------------------------------------------------------------------
+    # Markdown file operations
+    # -----------------------------------------------------------------------
+
+    def _read_entry(self, filepath: Path) -> dict[str, Any] | None:
+        """
+        Parse a Markdown entry file (YAML frontmatter + body).
+
+        Args:
+            filepath: Path to the .md file.
+
+        Returns:
+            Dict with id, title, tags, content keys, or None if unparseable.
+        """
+
+        try:
+            text = filepath.read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.warning("Cannot read %s: %s", filepath, exc)
+            # Unreadable file
+            return None
+
+        # Split frontmatter (between --- delimiters) from content
+        if not text.startswith("---"):
+            logger.warning("No frontmatter in %s", filepath)
+            # Missing frontmatter
+            return None
+
+        parts = text.split("---", 2)
+        if len(parts) < 3:
+            logger.warning("Malformed frontmatter in %s", filepath)
+            # Incomplete frontmatter
+            return None
+
+        try:
+            meta = yaml.safe_load(parts[1])
+        except yaml.YAMLError as exc:
+            logger.warning("YAML parse error in %s: %s", filepath, exc)
+            # Bad YAML
+            return None
+
+        if not isinstance(meta, dict):
+            logger.warning("Frontmatter is not a dict in %s", filepath)
+            # Invalid structure
+            return None
+
+        content = parts[2].strip()
+
+        # Parsed entry
+        return {
+            "id": str(meta.get("id", "")),
+            "title": str(meta.get("title", "")),
+            "tags": _normalize_tags(meta.get("tags", [])),
+            "content": content,
+        }
+
+    def _write_entry(self, entry: dict[str, Any]) -> Path:
+        """
+        Write an entry to a Markdown file with YAML frontmatter.
+
+        Args:
+            entry: Dict with id, title, tags, content.
+
+        Returns:
+            Path to the written file.
+        """
+
+        filepath = self._entries_path / f"{entry['id']}.md"
+
+        frontmatter = yaml.dump(
+            {"id": entry["id"], "title": entry["title"], "tags": entry["tags"]},
+            default_flow_style=True,
+            allow_unicode=True,
+            sort_keys=False,
+        ).strip()
+
+        text = f"---\n{frontmatter}\n---\n\n{entry['content']}\n"
+        filepath.write_text(text, encoding="utf-8")
+
+        logger.info("Wrote entry %s to %s", entry["id"], filepath)
+        # File written
+        return filepath
+
+    def _delete_entry_file(self, entry_id: str) -> bool:
+        """
+        Delete the Markdown file for an entry.
+
+        Args:
+            entry_id: UUID of the entry.
+
+        Returns:
+            True if deleted, False if not found.
+        """
+
+        filepath = self._entries_path / f"{entry_id}.md"
+        if filepath.exists():
+            filepath.unlink()
+            logger.info("Deleted file %s", filepath)
+            # Deleted
+            return True
+
+        logger.warning("File not found for deletion: %s", filepath)
+        # Not found
+        return False
+
+    # -----------------------------------------------------------------------
+    # Xapian index operations
+    # -----------------------------------------------------------------------
+
+    def _get_writable_db(self) -> xapian.WritableDatabase:
+        """
+        Open the Xapian database for writing.
+
+        Returns:
+            A WritableDatabase instance.
+        """
+
+        # Open writable database
+        return xapian.WritableDatabase(str(self._index_path), xapian.DB_CREATE_OR_OPEN)
+
+    def _get_readable_db(self) -> xapian.Database:
+        """
+        Open the Xapian database for reading.
+
+        Returns:
+            A Database instance.
+
+        Errors:
+            Returns None-safe — caller must handle DatabaseOpeningError.
+        """
+
+        # Open read-only database
+        return xapian.Database(str(self._index_path))
+
+    def _index_entry(self, entry: dict[str, Any]) -> None:
+        """
+        Index or update an entry in Xapian.
+
+        Uses replace_document with Q<uuid> as the unique ID term for upsert.
+
+        Args:
+            entry: Dict with id, title, tags, content.
+        """
+
+        db = self._get_writable_db()
+        doc = xapian.Document()
+
+        # Term generator with French stemmer
+        tg = xapian.TermGenerator()
+        tg.set_stemmer(xapian.Stem("fr"))
+        tg.set_database(db)
+        tg.set_flags(tg.FLAG_SPELLING)
+        tg.set_document(doc)
+
+        # Index title with higher weight (wdf_inc=5)
+        tg.index_text(entry["title"], 5, PREFIX_TITLE)
+        # Also index title without prefix for general search
+        tg.index_text(entry["title"], 5)
+
+        # Index tags
+        for tag in entry["tags"]:
+            doc.add_boolean_term(f"{PREFIX_TAG}{tag}")
+            # Also index tag text for general search
+            tg.index_text(tag, 1)
+
+        # Index content
+        tg.increase_termpos()
+        tg.index_text(entry["content"], 1)
+
+        # Store data for retrieval (title for snippets)
+        doc.set_data(entry["id"])
+
+        # Unique ID term for upsert
+        id_term = f"{PREFIX_ID}{entry['id']}"
+        doc.add_boolean_term(id_term)
+        db.replace_document(id_term, doc)
+
+        # Explicit commit to ensure changes are visible to subsequent reads
+        db.commit()
+        db.close()
+        logger.info("Indexed entry %s", entry["id"])
+
+    def _unindex_entry(self, entry_id: str) -> None:
+        """
+        Remove an entry from the Xapian index.
+
+        Args:
+            entry_id: UUID of the entry.
+        """
+
+        db = self._get_writable_db()
+        id_term = f"{PREFIX_ID}{entry_id}"
+        db.delete_document(id_term)
+        db.close()
+        logger.info("Unindexed entry %s", entry_id)
+
+    def rebuild(self) -> int:
+        """
+        Rebuild the Xapian index from all Markdown files.
+
+        Deletes the existing index and reindexes every entry file.
+
+        Returns:
+            Number of entries indexed.
+        """
+
+        logger.info("Rebuilding index from %s", self._entries_path)
+
+        # Delete existing index
+        db = xapian.WritableDatabase(
+            str(self._index_path), xapian.DB_CREATE_OR_OVERWRITE
+        )
+        db.close()
+
+        count = 0
+        for filepath in sorted(self._entries_path.glob("*.md")):
+            entry = self._read_entry(filepath)
+            if entry and entry["id"]:
+                self._index_entry(entry)
+                count += 1
+            else:
+                logger.warning("Skipped invalid entry: %s", filepath)
+
+        logger.info("Rebuild complete: %d entries indexed", count)
+        # Rebuild done
+        return count
+
+    # -----------------------------------------------------------------------
+    # CRUD operations (file + index)
+    # -----------------------------------------------------------------------
+
+    def store(
+        self,
+        title: str,
+        content: str,
+        tags: list[str],
+        force: bool = False,
+    ) -> dict[str, Any]:
+        """
+        Create a new entry. Blocks if a duplicate title is detected.
+
+        Args:
+            title: Entry title.
+            content: Entry body (Markdown).
+            tags: List of tags.
+            force: If True, skip duplicate check.
+
+        Returns:
+            Dict with 'id' on success, or 'error' and 'duplicates' on conflict.
+        """
+
+        tags = _normalize_tags(tags)
+
+        # Check for duplicates unless forced
+        if not force:
+            similar = self.find_similar(title)
+            if similar:
+                logger.info(
+                    "Duplicate detected for '%s': %d similar entries",
+                    title,
+                    len(similar),
+                )
+                # Duplicate blocked
+                return {
+                    "error": "duplicate_detected",
+                    "message": (
+                        f"Found {len(similar)} similar entry(ies). "
+                        "Use force=True to create anyway."
+                    ),
+                    "duplicates": similar,
+                }
+
+        entry_id = str(uuid.uuid4())
+        entry = {
+            "id": entry_id,
+            "title": title,
+            "tags": tags,
+            "content": content,
+        }
+
+        self._write_entry(entry)
+        self._index_entry(entry)
+
+        logger.info("Stored new entry %s: %s", entry_id, title)
+        # Entry created
+        return {"id": entry_id, "title": title}
+
+    def get(self, entry_id: str) -> dict[str, Any] | None:
+        """
+        Read the full content of an entry.
+
+        Args:
+            entry_id: UUID of the entry.
+
+        Returns:
+            Entry dict or None if not found.
+        """
+
+        filepath = self._entries_path / f"{entry_id}.md"
+        if not filepath.exists():
+            # Not found
+            return None
+
+        # Read and return
+        return self._read_entry(filepath)
+
+    def update(
+        self,
+        entry_id: str,
+        title: str | None = None,
+        content: str | None = None,
+        tags: list[str] | None = None,
+    ) -> bool:
+        """
+        Partially update an entry. Only provided fields are changed.
+
+        Args:
+            entry_id: UUID of the entry to update.
+            title: New title (optional).
+            content: New content (optional).
+            tags: New tags — full replacement if provided (optional).
+
+        Returns:
+            True if updated, False if entry not found.
+        """
+
+        existing = self.get(entry_id)
+        if not existing:
+            logger.warning("Update failed — entry %s not found", entry_id)
+            # Not found
+            return False
+
+        if title is not None:
+            existing["title"] = title
+        if content is not None:
+            existing["content"] = content
+        if tags is not None:
+            existing["tags"] = _normalize_tags(tags)
+
+        self._write_entry(existing)
+        self._index_entry(existing)
+
+        logger.info("Updated entry %s", entry_id)
+        # Updated
+        return True
+
+    def delete(self, entry_id: str) -> bool:
+        """
+        Delete an entry (file + index).
+
+        Args:
+            entry_id: UUID of the entry.
+
+        Returns:
+            True if deleted, False if not found.
+        """
+
+        filepath = self._entries_path / f"{entry_id}.md"
+        if not filepath.exists():
+            logger.warning("Delete failed — entry %s not found", entry_id)
+            # Not found
+            return False
+
+        self._delete_entry_file(entry_id)
+
+        try:
+            self._unindex_entry(entry_id)
+        except xapian.DocNotFoundError:
+            logger.warning("Entry %s not in index (already removed?)", entry_id)
+
+        logger.info("Deleted entry %s", entry_id)
+        # Deleted
+        return True
+
+    # -----------------------------------------------------------------------
+    # Search operations
+    # -----------------------------------------------------------------------
+
+    def search(
+        self,
+        query_str: str,
+        tags: list[str] | None = None,
+        limit: int = DEFAULT_SEARCH_LIMIT,
+    ) -> list[dict[str, Any]]:
+        """
+        Full-text search with optional tag filtering.
+
+        Args:
+            query_str: Search query string.
+            tags: Optional list of tags to filter by (AND logic).
+            limit: Maximum number of results.
+
+        Returns:
+            List of dicts with id, title, tags, snippet, score.
+        """
+
+        try:
+            db = self._get_readable_db()
+        except xapian.DatabaseOpeningError:
+            logger.warning("Index not found — returning empty results")
+            # No index
+            return []
+
+        # Query parser with French stemmer
+        qp = xapian.QueryParser()
+        qp.set_stemmer(xapian.Stem("fr"))
+        qp.set_stemming_strategy(qp.STEM_SOME)
+        qp.set_database(db)
+
+        # Allow prefix searches
+        qp.add_prefix("title", PREFIX_TITLE)
+        qp.add_prefix("tag", PREFIX_TAG)
+
+        flags = qp.FLAG_DEFAULT | qp.FLAG_SPELLING_CORRECTION | qp.FLAG_WILDCARD
+        query = qp.parse_query(query_str, flags)
+
+        # Apply tag filter if specified
+        if tags:
+            tag_queries = [
+                xapian.Query(f"{PREFIX_TAG}{t}") for t in _normalize_tags(tags)
+            ]
+            tag_query = xapian.Query(xapian.Query.OP_AND, tag_queries)
+            query = xapian.Query(xapian.Query.OP_FILTER, query, tag_query)
+
+        enquire = xapian.Enquire(db)
+        enquire.set_query(query)
+
+        results = []
+        for match in enquire.get_mset(0, limit):
+            entry_id = match.document.get_data().decode("utf-8")
+            entry = self.get(entry_id)
+            if entry:
+                # Build snippet (first 200 chars of content)
+                snippet = entry["content"][:200]
+                if len(entry["content"]) > 200:
+                    snippet += "..."
+
+                results.append(
+                    {
+                        "id": entry["id"],
+                        "title": entry["title"],
+                        "tags": entry["tags"],
+                        "snippet": snippet,
+                        "score": match.percent,
+                    }
+                )
+
+        logger.info("Search '%s' returned %d results", query_str, len(results))
+        # Search complete
+        return results
+
+    def find_similar(self, title: str, limit: int = 5) -> list[dict[str, Any]]:
+        """
+        Find entries with similar titles (for duplicate detection).
+
+        Uses SequenceMatcher on normalized titles for reliable comparison,
+        independent of Xapian stemming/scoring quirks.
+
+        Args:
+            title: Title to check against existing entries.
+            limit: Maximum number of similar entries to return.
+
+        Returns:
+            List of dicts with id, title, score for similar entries.
+        """
+
+        normalized_title = title.lower().strip()
+        similar = []
+
+        for filepath in self._entries_path.glob("*.md"):
+            entry = self._read_entry(filepath)
+            if not entry or not entry["id"]:
+                continue
+
+            ratio = SequenceMatcher(
+                None, normalized_title, entry["title"].lower().strip()
+            ).ratio()
+
+            if ratio >= DUPLICATE_THRESHOLD:
+                similar.append(
+                    {
+                        "id": entry["id"],
+                        "title": entry["title"],
+                        "score": int(ratio * 100),
+                    }
+                )
+
+        # Sort by score descending, limit results
+        similar.sort(key=lambda x: -x["score"])
+
+        # Similarity check complete
+        return similar[:limit]
+
+    # -----------------------------------------------------------------------
+    # Browse operations
+    # -----------------------------------------------------------------------
+
+    def list_entries(
+        self,
+        tags: list[str] | None = None,
+        limit: int = DEFAULT_LIST_LIMIT,
+    ) -> list[dict[str, Any]]:
+        """
+        List entries sorted by title, with optional tag filter.
+
+        Args:
+            tags: Optional list of tags to filter by (AND logic).
+            limit: Maximum number of entries.
+
+        Returns:
+            List of dicts with id, title, tags.
+        """
+
+        filter_tags = set(_normalize_tags(tags)) if tags else None
+
+        entries = []
+        for filepath in sorted(self._entries_path.glob("*.md")):
+            entry = self._read_entry(filepath)
+            if not entry or not entry["id"]:
+                continue
+
+            # Apply tag filter
+            if filter_tags and not filter_tags.issubset(set(entry["tags"])):
+                continue
+
+            entries.append(
+                {
+                    "id": entry["id"],
+                    "title": entry["title"],
+                    "tags": entry["tags"],
+                }
+            )
+
+        # Sort by title
+        entries.sort(key=lambda e: e["title"].lower())
+
+        # Listed
+        return entries[:limit]
+
+    def list_tags(self) -> list[dict[str, Any]]:
+        """
+        List all tags with their entry counts.
+
+        Returns:
+            List of dicts with tag and count, sorted by count descending.
+        """
+
+        tag_counts: dict[str, int] = {}
+
+        for filepath in self._entries_path.glob("*.md"):
+            entry = self._read_entry(filepath)
+            if not entry:
+                continue
+            for tag in entry["tags"]:
+                tag_counts[tag] = tag_counts.get(tag, 0) + 1
+
+        result = [{"tag": tag, "count": count} for tag, count in tag_counts.items()]
+        result.sort(key=lambda x: (-x["count"], x["tag"]))
+
+        # Tags listed
+        return result
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _normalize_tags(tags: Any) -> list[str]:
+    """
+    Normalize a list of tags: lowercase, strip whitespace, reject empty.
+
+    Args:
+        tags: Raw tags input (list or other).
+
+    Returns:
+        Cleaned list of tag strings.
+    """
+
+    if not isinstance(tags, list):
+        # Not a list
+        return []
+
+    normalized = []
+    for tag in tags:
+        clean = str(tag).lower().strip()
+        if clean:
+            normalized.append(clean)
+
+    # Normalized
+    return sorted(set(normalized))

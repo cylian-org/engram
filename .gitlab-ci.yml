@@ -1,0 +1,15 @@
+# GitLab CI/CD Pipeline for mcp-kb
+# Python MCP server — knowledge base with Xapian search
+
+stages:
+  - analyse
+  - release
+
+# Variables globales
+variables:
+  GIT_DEPTH: 10
+
+# Includes locaux pour chaque stage
+include:
+  - local: 'ci/analyse_lint.yml'
+  - local: 'ci/release_tag.yml'
