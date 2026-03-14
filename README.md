@@ -89,6 +89,38 @@ and depends on [PostgreSQL](kb://f9e8d7c6-...#depends-on).
 
 Like [HATEOAS](https://en.wikipedia.org/wiki/HATEOAS) for knowledge — every response carries the links to navigate the graph.
 
+## Usage Examples
+
+### Store knowledge
+
+Ask your agent:
+
+> "Remember that our API runs on port 8080 and depends on PostgreSQL 15."
+
+Engram creates a Markdown file with a unique UUID, indexes it, and confirms. The agent can now recall this fact in any future session.
+
+### Search
+
+> "What do we know about PostgreSQL?"
+
+Engram searches across all entries by content, title, and tags. Results are ranked by relevance.
+
+### Navigate the graph
+
+> "What depends on PostgreSQL?"
+
+If entries link to the PostgreSQL article with `kb://uuid#depends-on`, Engram returns all backlinks — showing every service that depends on it, without the agent having to search for each one.
+
+### Share knowledge across agents
+
+Start Engram with SSE or HTTP transport. Multiple agents — even from different providers (Claude, ChatGPT, Copilot) — connect to the same server. What one agent remembers, all others can recall.
+
+```
+Agent A: "Remember that the deploy key rotates every 90 days."
+Agent B: "When does the deploy key expire?"
+→ Agent B finds the answer immediately.
+```
+
 ## Configuration
 
 All options have `ENGRAM_*` environment variable fallbacks. CLI args take priority.
