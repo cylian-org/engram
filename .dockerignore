@@ -1,0 +1,11 @@
+.git
+.gitignore
+.venv
+.pytest_cache
+.ruff_cache
+__pycache__
+tests/
+ci/
+docs/
+*.md
+!requirements.txt
