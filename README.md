@@ -11,7 +11,8 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) server that gives A
 Your agent manages the server. Recommended for Claude Code, ChatGPT Desktop, Cursor.
 
 ```bash
-claude mcp add --transport stdio engram -- docker run -i --rm -v ./knowledge:/knowledge cylian/engram
+claude mcp add --transport stdio engram -- \
+  docker run -i --rm -v ./knowledge:/knowledge cylian/engram
 ```
 
 ### SSE
