@@ -18,3 +18,4 @@ include:
   - local: 'ci/package_docker.yml'
   - local: 'ci/release_tag.yml'
   - local: 'ci/mirror_github.yml'
+  - local: 'ci/dockerhub_readme.yml'
