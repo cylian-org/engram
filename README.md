@@ -121,6 +121,23 @@ Agent B: "When does the deploy key expire?"
 → Agent B finds the answer immediately.
 ```
 
+## Prompt Your Agent
+
+Add this to your system prompt or project instructions to make your agent use Engram as a reflex, not an afterthought:
+
+```
+Engram is your persistent memory. Using it is mandatory, not optional.
+
+Before working on any topic: search Engram first. Always. Even if you think you know.
+Before answering a question about infrastructure or architecture: search first.
+Before proposing a solution: check if a past decision exists in Engram.
+
+After resolving a diagnostic: remember the root cause and the fix.
+After executing a procedure: remember the steps.
+After making an architecture decision: remember the choice and the rationale.
+After discovering something about the infrastructure: remember it.
+```
+
 ## Configuration
 
 All options have `ENGRAM_*` environment variable fallbacks. CLI args take priority.
