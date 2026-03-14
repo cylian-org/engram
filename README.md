@@ -22,13 +22,13 @@ claude mcp add --transport stdio engram -- \
 ### SSE (network — share KB across agents)
 
 ```bash
+# Start the server
 docker run -d --name engram \
   -p 8192:8192 \
   -v ./knowledge:/knowledge \
   cylian/engram --transport sse
-```
 
-```bash
+# Register in Claude Code
 claude mcp add --transport sse \
   engram http://your-host:8192/sse
 ```
@@ -36,10 +36,15 @@ claude mcp add --transport sse \
 ### HTTP (stateless — load-balanceable)
 
 ```bash
+# Start the server
 docker run -d --name engram \
   -p 8192:8192 \
   -v ./knowledge:/knowledge \
   cylian/engram --transport streamable-http
+
+# Register in Claude Code
+claude mcp add --transport http \
+  engram http://your-host:8192/mcp
 ```
 
 ## Search Backends
