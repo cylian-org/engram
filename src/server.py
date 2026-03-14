@@ -68,7 +68,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--backend",
         default=_env("BACKEND", "xapian"),
-        help="Search backend: xapian, sqlite, whoosh (env: ENGRAM_BACKEND, default: xapian)",
+        help="Search backend: xapian, sqlite (env: ENGRAM_BACKEND, default: xapian)",
     )
     parser.add_argument(
         "--language",

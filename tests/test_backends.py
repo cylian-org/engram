@@ -19,7 +19,6 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from backend.sqlite.main import SQLiteBackend
-from backend.whoosh.main import WhooshBackend
 from backend.xapian.main import XapianBackend
 from database import KnowledgeBase
 
@@ -29,7 +28,7 @@ from database import KnowledgeBase
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(params=["xapian", "sqlite", "whoosh"])
+@pytest.fixture(params=["xapian", "sqlite"])
 def kb(request: pytest.FixtureRequest, tmp_path: Path) -> KnowledgeBase:
     """KnowledgeBase with each backend."""
 
@@ -40,8 +39,6 @@ def kb(request: pytest.FixtureRequest, tmp_path: Path) -> KnowledgeBase:
         backend = XapianBackend(index_path)
     elif name == "sqlite":
         backend = SQLiteBackend(index_path / "engram.db")
-    elif name == "whoosh":
-        backend = WhooshBackend(index_path)
     else:
         pytest.fail(f"Unknown backend: {name}")
 
