@@ -11,6 +11,7 @@ Source of truth: the Markdown files. The Xapian index is a rebuildable cache.
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -28,6 +29,8 @@ logger = logging.getLogger("mcp-kb")
 PREFIX_ID: str = "Q"
 PREFIX_TITLE: str = "XTITLE"
 PREFIX_TAG: str = "XTAG"
+PREFIX_RELOUT: str = "XRELOUT:"
+PREFIX_RELTGT: str = "XRELTGT:"
 
 # Weighting slots
 SLOT_TITLE: int = 0
@@ -38,6 +41,11 @@ DEFAULT_LIST_LIMIT: int = 50
 
 # Duplicate detection threshold (SequenceMatcher ratio, 0.0-1.0)
 DUPLICATE_THRESHOLD: float = 0.75
+
+# Regex for extracting kb:// links with optional #type fragment
+RE_KB_LINK: re.Pattern[str] = re.compile(
+    r"\[[^\]]*\]\(kb://([a-f0-9-]+)(?:#([a-zA-Z0-9_-]+))?\)"
+)
 
 
 class KnowledgeBase:
@@ -179,6 +187,43 @@ class KnowledgeBase:
         return False
 
     # -----------------------------------------------------------------------
+    # Relation extraction
+    # -----------------------------------------------------------------------
+
+    @staticmethod
+    def _extract_relations(content: str) -> list[dict[str, str]]:
+        """
+        Extract kb:// link relations from Markdown content.
+
+        Parses links of the form [label](kb://uuid) or [label](kb://uuid#type).
+        When no #type fragment is present, defaults to "related".
+
+        Args:
+            content: Markdown content body.
+
+        Returns:
+            List of dicts with 'target' (UUID) and 'type' (relation type).
+        """
+
+        relations: list[dict[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+
+        for match in RE_KB_LINK.finditer(content):
+            target_id = match.group(1)
+            rel_type = match.group(2) or "related"
+
+            # Deduplicate identical target+type pairs
+            key = (target_id, rel_type)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            relations.append({"target": target_id, "type": rel_type})
+
+        # Extracted
+        return relations
+
+    # -----------------------------------------------------------------------
     # Xapian index operations
     # -----------------------------------------------------------------------
 
@@ -241,6 +286,14 @@ class KnowledgeBase:
         # Index content
         tg.increase_termpos()
         tg.index_text(entry["content"], 1)
+
+        # Index outgoing relations from kb:// links in content
+        relations = self._extract_relations(entry["content"])
+        for rel in relations:
+            # Outgoing relation term: allows reading this entry's outgoing links
+            doc.add_boolean_term(f"{PREFIX_RELOUT}{rel['type']}:{rel['target']}")
+            # Target marker term: allows finding all entries that link TO a target
+            doc.add_boolean_term(f"{PREFIX_RELTGT}{rel['target']}")
 
         # Store data for retrieval (title for snippets)
         doc.set_data(entry["id"])
@@ -400,15 +453,17 @@ class KnowledgeBase:
         # Entry created
         return {"id": entry_id, "title": title, "action": "created"}
 
-    def get(self, entry_id: str) -> dict[str, Any] | None:
+    def get(self, entry_id: str, with_relations: bool = False) -> dict[str, Any] | None:
         """
         Read the full content of an entry.
 
         Args:
             entry_id: UUID of the entry.
+            with_relations: Include graph relations (outgoing and incoming links).
 
         Returns:
-            Entry dict or None if not found.
+            Entry dict or None if not found. When with_relations is True, includes
+            a 'relations' key with 'out' and 'in' lists.
         """
 
         filepath = self._entries_path / f"{entry_id}.md"
@@ -416,8 +471,133 @@ class KnowledgeBase:
             # Not found
             return None
 
-        # Read and return
-        return self._read_entry(filepath)
+        entry = self._read_entry(filepath)
+        if not entry:
+            # Unparseable
+            return None
+
+        # Append graph relations if requested
+        if with_relations:
+            entry["relations"] = self.get_relations(entry_id)
+
+        # Entry loaded
+        return entry
+
+    def get_relations(self, entry_id: str) -> dict[str, list[dict[str, str]]]:
+        """
+        Get all graph relations for an entry (outgoing and incoming).
+
+        Outgoing relations are read from the entry's Xapian document terms
+        (XRELOUT:{type}:{target_id}). Incoming relations (backlinks) are found
+        by searching for documents that have XRELTGT:{entry_id} terms, then
+        reading their XRELOUT terms to extract the relation type.
+
+        Args:
+            entry_id: UUID of the entry.
+
+        Returns:
+            Dict with 'out' list (outgoing) and 'in' list (incoming/backlinks).
+            Each item has 'type', 'id', and 'title' keys.
+        """
+
+        out: list[dict[str, str]] = []
+        incoming: list[dict[str, str]] = []
+
+        try:
+            db = self._get_readable_db()
+        except xapian.DatabaseOpeningError:
+            logger.warning("Index not found — returning empty relations")
+            # No index
+            return {"out": out, "in": incoming}
+
+        # --- Outgoing relations ---
+        # Find the document for this entry by its Q-term
+        id_term = f"{PREFIX_ID}{entry_id}"
+        postlist = db.postlist(id_term)
+        try:
+            posting = next(postlist)
+            doc = db.get_document(posting.docid)
+
+            # Read all XRELOUT: terms from this document
+            for term_item in doc:
+                term = term_item.term.decode("utf-8")
+                if term.startswith(PREFIX_RELOUT):
+                    # Parse "XRELOUT:{type}:{target_id}"
+                    remainder = term[len(PREFIX_RELOUT) :]
+                    colon_pos = remainder.find(":")
+                    if colon_pos == -1:
+                        continue
+                    rel_type = remainder[:colon_pos]
+                    target_id = remainder[colon_pos + 1 :]
+
+                    # Resolve target title from file
+                    target_title = self._resolve_title(target_id)
+                    out.append(
+                        {"type": rel_type, "id": target_id, "title": target_title}
+                    )
+        except StopIteration:
+            # Entry not in index — no outgoing relations
+            pass
+
+        # --- Incoming relations (backlinks) ---
+        # Find all documents that have XRELTGT:{entry_id} term
+        tgt_term = f"{PREFIX_RELTGT}{entry_id}"
+        for posting in db.postlist(tgt_term):
+            source_doc = db.get_document(posting.docid)
+            source_id = source_doc.get_data().decode("utf-8")
+
+            # Skip self-references
+            if source_id == entry_id:
+                continue
+
+            # Find the relation type(s) from this source pointing to entry_id
+            for term_item in source_doc:
+                term = term_item.term.decode("utf-8")
+                if not term.startswith(PREFIX_RELOUT):
+                    continue
+                # Parse "XRELOUT:{type}:{target_id}"
+                remainder = term[len(PREFIX_RELOUT) :]
+                colon_pos = remainder.find(":")
+                if colon_pos == -1:
+                    continue
+                rel_type = remainder[:colon_pos]
+                target_id = remainder[colon_pos + 1 :]
+
+                # Only include if this relation points to our entry
+                if target_id != entry_id:
+                    continue
+
+                source_title = self._resolve_title(source_id)
+                incoming.append(
+                    {"type": rel_type, "id": source_id, "title": source_title}
+                )
+
+        # Relations resolved
+        return {"out": out, "in": incoming}
+
+    def _resolve_title(self, entry_id: str) -> str:
+        """
+        Read the title of an entry from its Markdown file.
+
+        Args:
+            entry_id: UUID of the entry.
+
+        Returns:
+            Entry title, or "(unknown)" if the file cannot be read.
+        """
+
+        filepath = self._entries_path / f"{entry_id}.md"
+        if not filepath.exists():
+            # Missing file
+            return "(unknown)"
+
+        entry = self._read_entry(filepath)
+        if not entry:
+            # Unparseable file
+            return "(unknown)"
+
+        # Title resolved
+        return entry["title"]
 
     def delete(self, entry_id: str) -> bool:
         """

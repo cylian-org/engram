@@ -35,13 +35,30 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="MCP KB Server (stdio)")
     parser.add_argument(
         "--data-path",
-        default="/opt/knowledge",
-        help="Root path for knowledge data (default: /opt/knowledge)",
+        default="/knowledge",
+        help="Root path for knowledge data (default: /knowledge)",
     )
     parser.add_argument(
         "--log-file",
-        default="/var/log/mcp-kb.log",
-        help="Path to the log file (default: /var/log/mcp-kb.log)",
+        default=None,
+        help="Path to the log file (default: stderr)",
+    )
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "sse", "streamable-http"],
+        default="stdio",
+        help="MCP transport protocol (default: stdio)",
+    )
+    parser.add_argument(
+        "--host",
+        default="0.0.0.0",
+        help="Listen address for SSE/HTTP transport (default: 0.0.0.0)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8192,
+        help="Listen port for SSE/HTTP transport (default: 8192)",
     )
 
     # Parsed arguments
@@ -80,10 +97,15 @@ def setup_logging(log_file: str) -> logging.Logger:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    # File handler (only — stderr is captured by Claude Code in stdio mode)
-    file_handler = logging.FileHandler(log_file, encoding="utf-8")
-    file_handler.setFormatter(formatter)
-    log.addHandler(file_handler)
+    if log_file:
+        # File handler (explicit path)
+        handler = logging.FileHandler(log_file, encoding="utf-8")
+    else:
+        # Stderr handler (default)
+        handler = logging.StreamHandler()
+
+    handler.setFormatter(formatter)
+    log.addHandler(handler)
 
     # Logger configured
     return log
@@ -103,7 +125,7 @@ logger.info("Knowledge base ready")
 # MCP Server
 # ---------------------------------------------------------------------------
 
-mcp = FastMCP(name="MCP KB Server")
+mcp = FastMCP(name="MCP KB Server", host=args.host, port=args.port)
 
 # ---------------------------------------------------------------------------
 # Tools
@@ -144,16 +166,20 @@ def recall(entry_id: str) -> dict:
     """
     Read the full content of a knowledge base entry.
 
+    Also returns graph relations: outgoing links (from kb://uuid#type
+    in content) and incoming backlinks (other articles linking here).
+
     Args:
         entry_id: UUID of the entry.
 
     Returns:
-        Dict with id, title, tags, content — or error if not found.
+        Dict with id, title, tags, content, relations — or error if not found.
+        Relations has 'out' and 'in' lists, each with type, id, title.
     """
 
     logger.info("recall: id=%s", entry_id)
 
-    entry = kb.get(entry_id)
+    entry = kb.get(entry_id, with_relations=True)
     if not entry:
         # Not found
         return {"error": f"Entry {entry_id} not found"}
@@ -179,6 +205,11 @@ def remember(
        - If a match is found → update the best match
        - If no match → create a new entry
     3. If force=True → always create new (skip duplicate detection)
+
+    Content may contain links to other entries using the format
+    [label](kb://uuid#type) where type is the relation kind (e.g.
+    runs-on, depends-on, mirrors). These links are automatically
+    indexed as graph relations, queryable via recall.
 
     Args:
         title: Entry title.
@@ -295,5 +326,5 @@ def rebuild() -> dict:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    logger.info("Starting MCP KB Server (stdio transport)")
-    mcp.run(transport="stdio")
+    logger.info("Starting MCP KB Server (%s transport)", args.transport)
+    mcp.run(transport=args.transport)

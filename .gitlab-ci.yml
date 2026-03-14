@@ -3,6 +3,7 @@
 
 stages:
   - analyse
+  - test
   - release
 
 # Variables globales
@@ -12,4 +13,5 @@ variables:
 # Includes locaux pour chaque stage
 include:
   - local: 'ci/analyse_lint.yml'
+  - local: 'ci/test_pytest.yml'
   - local: 'ci/release_tag.yml'
