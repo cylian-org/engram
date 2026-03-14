@@ -6,10 +6,6 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) server that gives A
 
 ## Quick Start
 
-```bash
-docker pull cylian/engram:latest
-```
-
 ### stdio
 
 Your agent manages the server. Recommended for Claude Code, ChatGPT Desktop, Cursor.
@@ -24,7 +20,11 @@ claude mcp add --transport stdio engram -- \
 Persistent server on the network. Share a KB across multiple agents.
 
 ```bash
-docker run -d --name engram -p 8192:8192 -v ./knowledge:/knowledge cylian/engram --transport sse
+docker run -d --name engram \
+  -p 8192:8192 \
+  -v ./knowledge:/knowledge \
+  cylian/engram --transport sse
+
 claude mcp add --transport sse engram http://your-host:8192/sse
 ```
 
@@ -33,7 +33,11 @@ claude mcp add --transport sse engram http://your-host:8192/sse
 Stateless, load-balanceable.
 
 ```bash
-docker run -d --name engram -p 8192:8192 -v ./knowledge:/knowledge cylian/engram --transport streamable-http
+docker run -d --name engram \
+  -p 8192:8192 \
+  -v ./knowledge:/knowledge \
+  cylian/engram --transport streamable-http
+
 claude mcp add --transport http engram http://your-host:8192/mcp
 ```
 
@@ -46,7 +50,7 @@ Two backends ship out of the box. Switch with `--backend` or `ENGRAM_BACKEND`:
 | `xapian` | ✓ | Fast full-text search with configurable stemming |
 | `sqlite` | | SQLite FTS5 — query your index with standard SQL tools |
 
-The backend is pluggable: drop a `backend/{name}/main.py` with a `SearchBackend` subclass and it's available automatically.
+The backend is pluggable — see [Custom Backend](#custom-backend) below.
 
 ## Tools
 
@@ -114,18 +118,65 @@ Markdown content here...
 
 The search index is a rebuildable cache in `<data-path>/index/<backend>/`. Delete it and `rebuild` — no data is ever lost.
 
+## Custom Backend
+
+Create `backend/{name}/main.py` with a class inheriting `SearchBackend`:
+
+```python
+from backend import SearchBackend
+
+class MyBackend(SearchBackend):
+    def index(self, entry):
+        """Index or update an entry (upsert)."""
+        ...
+
+    def unindex(self, entry_id):
+        """Remove an entry from the index."""
+        ...
+
+    def search(self, query_str, tags, limit):
+        """Full-text search. Return [{id, score}]."""
+        ...
+
+    def rebuild(self, entries):
+        """Rebuild index from entries list. Return count."""
+        ...
+
+    def get_relations(self, entry_id):
+        """Return {out: [{type, id}], in: [{type, id}]}."""
+        ...
+```
+
+Then use it with `--backend {name}`. Engram loads it automatically via `importlib`.
+
+### Example: adding Whoosh backend
+
+```dockerfile
+FROM cylian/engram:latest
+
+# Install Whoosh
+RUN pip install --no-cache-dir whoosh==2.7.4
+
+# Add backend
+COPY whoosh_backend/ /app/backend/whoosh/
+```
+
+```bash
+docker build -t engram-whoosh .
+docker run -i --rm -v ./knowledge:/knowledge engram-whoosh --backend whoosh
+```
+
 ## Development
 
 ```bash
-# Install
-python3 -m venv .venv --system-site-packages
-.venv/bin/pip install -r src/requirements.txt
+# Build
+docker build -t engram .
 
 # Test (89 tests, 90% coverage)
-.venv/bin/python -m pytest tests/ -v
+docker run --rm engram python -m pytest tests/ -v
 
-# Lint
-.venv/bin/python -m ruff check src/ tests/
+# Run locally (SSE)
+docker run -d --name engram -p 8192:8192 -v ./knowledge:/knowledge engram --transport sse
 ```
 
 ## License
