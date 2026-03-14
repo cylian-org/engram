@@ -111,7 +111,7 @@ mcp = FastMCP(name="MCP KB Server")
 
 
 @mcp.tool()
-def kb_search(
+def search(
     query: str,
     tags: list[str] | None = None,
     limit: int = 10,
@@ -131,7 +131,7 @@ def kb_search(
         Dict with results list (id, title, tags, snippet, score).
     """
 
-    logger.info("kb_search: query='%s', tags=%s, limit=%d", query, tags, limit)
+    logger.info("search: query='%s', tags=%s, limit=%d", query, tags, limit)
 
     results = kb.search(query, tags=tags, limit=limit)
 
@@ -140,7 +140,7 @@ def kb_search(
 
 
 @mcp.tool()
-def kb_get(entry_id: str) -> dict:
+def recall(entry_id: str) -> dict:
     """
     Read the full content of a knowledge base entry.
 
@@ -151,7 +151,7 @@ def kb_get(entry_id: str) -> dict:
         Dict with id, title, tags, content — or error if not found.
     """
 
-    logger.info("kb_get: id=%s", entry_id)
+    logger.info("recall: id=%s", entry_id)
 
     entry = kb.get(entry_id)
     if not entry:
@@ -163,76 +163,50 @@ def kb_get(entry_id: str) -> dict:
 
 
 @mcp.tool()
-def kb_store(
+def remember(
     title: str,
     content: str,
     tags: list[str],
+    entry_id: str | None = None,
     force: bool = False,
 ) -> dict:
     """
-    Create a new knowledge base entry.
+    Store or update a knowledge base entry (upsert).
 
-    Blocks if a duplicate title is detected (similar existing entry).
-    Use force=True to bypass duplicate check.
+    Resolution order:
+    1. If entry_id is provided → update that entry
+    2. If no entry_id → search for similar titles
+       - If a match is found → update the best match
+       - If no match → create a new entry
+    3. If force=True → always create new (skip duplicate detection)
 
     Args:
         title: Entry title.
         content: Entry body (Markdown).
         tags: List of tags for categorization.
-        force: Skip duplicate detection (default: False).
+        entry_id: Optional UUID of an existing entry to update.
+        force: Skip duplicate detection and always create new.
 
     Returns:
-        Dict with id on success, or error with duplicates list on conflict.
+        Dict with id, title, and action ('created' or 'updated').
     """
 
-    logger.info("kb_store: title='%s', tags=%s, force=%s", title, tags, force)
+    logger.info(
+        "remember: title='%s', tags=%s, entry_id=%s, force=%s",
+        title,
+        tags,
+        entry_id,
+        force,
+    )
 
-    result = kb.store(title, content, tags, force=force)
+    result = kb.remember(title, content, tags, entry_id=entry_id, force=force)
 
-    # Store done
+    # Remember done
     return result
 
 
 @mcp.tool()
-def kb_update(
-    entry_id: str,
-    title: str | None = None,
-    content: str | None = None,
-    tags: list[str] | None = None,
-) -> dict:
-    """
-    Update an existing knowledge base entry.
-
-    Only provided fields are changed. Tags are fully replaced if provided.
-
-    Args:
-        entry_id: UUID of the entry to update.
-        title: New title (optional).
-        content: New content (optional).
-        tags: New tags — replaces existing tags entirely (optional).
-
-    Returns:
-        Dict with success status or error if not found.
-    """
-
-    logger.info(
-        "kb_update: id=%s, title=%s, tags=%s",
-        entry_id,
-        title is not None,
-        tags is not None,
-    )
-
-    success = kb.update(entry_id, title=title, content=content, tags=tags)
-    if not success:
-        # Not found
-        return {"error": f"Entry {entry_id} not found"}
-
-    # Updated
-    return {"success": True, "id": entry_id}
-
-
-@mcp.tool()
-def kb_delete(entry_id: str) -> dict:
+def forget(entry_id: str) -> dict:
     """
     Delete a knowledge base entry (file and index).
 
@@ -243,19 +217,19 @@ def kb_delete(entry_id: str) -> dict:
         Dict with success status or error if not found.
     """
 
-    logger.info("kb_delete: id=%s", entry_id)
+    logger.info("forget: id=%s", entry_id)
 
     success = kb.delete(entry_id)
     if not success:
         # Not found
         return {"error": f"Entry {entry_id} not found"}
 
-    # Deleted
+    # Forgotten
     return {"success": True, "id": entry_id}
 
 
 @mcp.tool()
-def kb_list(
+def list(
     tags: list[str] | None = None,
     limit: int = 50,
 ) -> dict:
@@ -270,7 +244,7 @@ def kb_list(
         Dict with entries list (id, title, tags).
     """
 
-    logger.info("kb_list: tags=%s, limit=%d", tags, limit)
+    logger.info("list: tags=%s, limit=%d", tags, limit)
 
     entries = kb.list_entries(tags=tags, limit=limit)
 
@@ -279,7 +253,7 @@ def kb_list(
 
 
 @mcp.tool()
-def kb_tags() -> dict:
+def tags() -> dict:
     """
     List all tags in the knowledge base with entry counts.
 
@@ -287,16 +261,16 @@ def kb_tags() -> dict:
         Dict with tags list (tag, count), sorted by count descending.
     """
 
-    logger.info("kb_tags")
+    logger.info("tags")
 
-    tags = kb.list_tags()
+    tag_list = kb.list_tags()
 
     # Tags listed
-    return {"count": len(tags), "tags": tags}
+    return {"count": len(tag_list), "tags": tag_list}
 
 
 @mcp.tool()
-def kb_rebuild() -> dict:
+def rebuild() -> dict:
     """
     Rebuild the Xapian search index from Markdown files.
 
@@ -307,11 +281,11 @@ def kb_rebuild() -> dict:
         Dict with number of entries indexed.
     """
 
-    logger.info("kb_rebuild: starting full rebuild")
+    logger.info("rebuild: starting full rebuild")
 
     count = kb.rebuild()
 
-    logger.info("kb_rebuild: complete — %d entries", count)
+    logger.info("rebuild: complete — %d entries", count)
     # Rebuild done
     return {"success": True, "entries_indexed": count}
 
