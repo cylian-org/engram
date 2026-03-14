@@ -49,7 +49,7 @@ Two backends ship out of the box. Switch with `--backend` or `ENGRAM_BACKEND`:
 | `xapian` | ✓ | Fast full-text search with configurable stemming |
 | `sqlite` | | SQLite FTS5 — query your index with standard SQL tools |
 
-The backend is pluggable: drop a `backend/{name}/main.py` with a `SearchBackend` subclass and it's available automatically.
+The backend is pluggable — see [Custom Backend](#custom-backend) below.
 
 ## Tools
 
@@ -116,6 +116,54 @@ Markdown content here...
 ```
 
 The search index is a rebuildable cache in `<data-path>/index/<backend>/`. Delete it and `rebuild` — no data is ever lost.
+
+## Custom Backend
+
+Create `backend/{name}/main.py` with a class inheriting `SearchBackend`:
+
+```python
+from backend import SearchBackend
+
+class MyBackend(SearchBackend):
+    def index(self, entry):
+        """Index or update an entry (upsert)."""
+        ...
+
+    def unindex(self, entry_id):
+        """Remove an entry from the index."""
+        ...
+
+    def search(self, query_str, tags, limit):
+        """Full-text search. Return [{id, score}]."""
+        ...
+
+    def rebuild(self, entries):
+        """Rebuild index from entries list. Return count."""
+        ...
+
+    def get_relations(self, entry_id):
+        """Return {out: [{type, id}], in: [{type, id}]}."""
+        ...
+```
+
+Then use it with `--backend {name}`. Engram loads it automatically via `importlib`.
+
+### Example: adding Whoosh backend
+
+```dockerfile
+FROM cylian/engram:latest
+
+# Install Whoosh
+RUN pip install --no-cache-dir whoosh==2.7.4
+
+# Add backend
+COPY whoosh_backend/ /app/backend/whoosh/
+```
+
+```bash
+docker build -t engram-whoosh .
+docker run -i --rm -v ./knowledge:/knowledge engram-whoosh --backend whoosh
+```
 
 ## Development
 
