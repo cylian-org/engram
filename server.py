@@ -144,11 +144,15 @@ def recall(entry_id: str) -> dict:
     """
     Read the full content of a knowledge base entry.
 
+    Also returns graph relations: outgoing links (from kb://uuid#type
+    in content) and incoming backlinks (other articles linking here).
+
     Args:
         entry_id: UUID of the entry.
 
     Returns:
-        Dict with id, title, tags, content — or error if not found.
+        Dict with id, title, tags, content, relations — or error if not found.
+        Relations has 'out' and 'in' lists, each with type, id, title.
     """
 
     logger.info("recall: id=%s", entry_id)
@@ -179,6 +183,11 @@ def remember(
        - If a match is found → update the best match
        - If no match → create a new entry
     3. If force=True → always create new (skip duplicate detection)
+
+    Content may contain links to other entries using the format
+    [label](kb://uuid#type) where type is the relation kind (e.g.
+    runs-on, depends-on, mirrors). These links are automatically
+    indexed as graph relations, queryable via recall.
 
     Args:
         title: Entry title.
