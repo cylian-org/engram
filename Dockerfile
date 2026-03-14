@@ -15,7 +15,7 @@ COPY server.py database.py ./
 # Data volume
 VOLUME /knowledge
 
-EXPOSE 8080
+EXPOSE 8192
 
-ENTRYPOINT ["python", "server.py", "--data-path", "/knowledge"]
+ENTRYPOINT ["python", "server.py"]
 CMD []

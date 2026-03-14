@@ -35,8 +35,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="MCP KB Server (stdio)")
     parser.add_argument(
         "--data-path",
-        default="/opt/knowledge",
-        help="Root path for knowledge data (default: /opt/knowledge)",
+        default="/knowledge",
+        help="Root path for knowledge data (default: /knowledge)",
     )
     parser.add_argument(
         "--log-file",
@@ -57,8 +57,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--port",
         type=int,
-        default=8000,
-        help="Listen port for SSE/HTTP transport (default: 8000)",
+        default=8192,
+        help="Listen port for SSE/HTTP transport (default: 8192)",
     )
 
     # Parsed arguments
