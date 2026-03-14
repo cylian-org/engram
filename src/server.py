@@ -49,11 +49,6 @@ def parse_args() -> argparse.Namespace:
         help="Root path for knowledge data (env: ENGRAM_DATA_PATH, default: /knowledge)",
     )
     parser.add_argument(
-        "--log-file",
-        default=_env("LOG_FILE"),
-        help="Path to the log file (env: ENGRAM_LOG_FILE, default: stderr)",
-    )
-    parser.add_argument(
         "--transport",
         choices=["stdio", "sse", "streamable-http"],
         default=_env("TRANSPORT", "stdio"),
@@ -90,21 +85,15 @@ def parse_args() -> argparse.Namespace:
 # ---------------------------------------------------------------------------
 
 
-def setup_logging(log_file: str | None) -> logging.Logger:
+def setup_logging() -> logging.Logger:
     """
-    Configure the application logger.
+    Configure the application logger to stderr.
 
-    Sets up file-only logging (stdout/stdin are reserved for MCP stdio
-    transport). Uses a consistent format with timestamps.
-
-    Args:
-        log_file: Path to the log file, or None for stderr.
+    All logs go to stderr (stdout/stdin are reserved for MCP stdio
+    transport). Use `docker logs` to read them.
 
     Returns:
         Configured logger instance.
-
-    Errors:
-        Raises if the log file cannot be opened (no fallback in stdio mode).
     """
 
     log = logging.getLogger("engram")
@@ -115,13 +104,8 @@ def setup_logging(log_file: str | None) -> logging.Logger:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    if log_file:
-        # File handler (explicit path)
-        handler: logging.Handler = logging.FileHandler(log_file, encoding="utf-8")
-    else:
-        # Stderr handler (default)
-        handler = logging.StreamHandler()
-
+    # Stderr handler
+    handler = logging.StreamHandler()
     handler.setFormatter(formatter)
     log.addHandler(handler)
 
@@ -428,7 +412,7 @@ def main() -> None:
     """
 
     args = parse_args()
-    logger = setup_logging(args.log_file)
+    logger = setup_logging()
 
     logger.info("Initializing knowledge base from %s", args.data_path)
     backend = _create_backend(
