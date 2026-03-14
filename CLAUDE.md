@@ -2,8 +2,8 @@
 
 ## Architecture
 
-- **server.py** : FastMCP server (stdio transport) — 7 MCP tools (remember, recall, search, list, tags, forget, rebuild)
-- **database.py** : Classe KnowledgeBase — fichiers Markdown + index Xapian
+- **src/server.py** : FastMCP server (stdio transport) — 7 MCP tools (remember, recall, search, list, tags, forget, rebuild)
+- **src/database.py** : Classe KnowledgeBase — fichiers Markdown + index Xapian
 - **Données** : `/opt/knowledge/entries/` (MD + frontmatter YAML)
 - **Index** : `/opt/knowledge/index/fr/` (Xapian, stemmer français)
 - **Log** : stderr (par défaut) ou `--log-file <path>`

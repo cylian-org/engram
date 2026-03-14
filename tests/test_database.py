@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 # Allow importing from project root
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from database import KnowledgeBase
 
