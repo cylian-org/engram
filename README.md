@@ -56,8 +56,8 @@ The backend is pluggable — see [Custom Backend](#custom-backend) below.
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
-| `remember` | Create or update an entry (upsert with duplicate detection) | `title`, `content`, `tags`, `entry_id`, `force` |
-| `recall` | Read an entry with its graph relations (outgoing + backlinks) | `entry_id` |
+| `remember` | Create or update an entry (upsert with duplicate detection). Returns `size` and `warnings` if article exceeds 2 KB or 4 KB. | `title`, `content`, `tags`, `entry_id`, `force` |
+| `recall` | Read an entry with its graph relations (outgoing + backlinks). Returns `size` and `last_modified`. | `entry_id` |
 | `search` | Full-text search with optional tag filter | `query`, `tags`, `limit` |
 | `list` | Browse entries sorted by title | `tags`, `limit` |
 | `tags` | List all tags with entry counts | — |
@@ -73,13 +73,16 @@ This service runs on [Saturn](kb://a1b2c3d4-...#runs-on)
 and depends on [PostgreSQL](kb://f9e8d7c6-...#depends-on).
 ```
 
-`recall` returns both directions:
+`recall` returns both directions, plus size metadata:
 
 ```json
 {
   "id": "a1b2c3d4-...",
   "title": "My API Service",
-  ...
+  "content": "...",
+  "tags": ["..."],
+  "size": 1024,
+  "last_modified": "2026-03-14",
   "relations": {
     "out": [{"type": "runs-on", "id": "e5f6...", "title": "Saturn"}],
     "in": [{"type": "depends-on", "id": "b7c8...", "title": "Frontend App"}]
