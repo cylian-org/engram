@@ -6,10 +6,6 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) server that gives A
 
 ## Quick Start
 
-```bash
-docker pull cylian/engram:latest
-```
-
 ### stdio
 
 Your agent manages the server. Recommended for Claude Code, ChatGPT Desktop, Cursor.
