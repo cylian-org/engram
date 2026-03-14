@@ -3,7 +3,7 @@ Engram — persistent knowledge base MCP server with full-text search.
 
 Provides MCP tools for storing, searching, and managing knowledge entries.
 Entries are Markdown files with YAML frontmatter, indexed by a pluggable
-search backend (Xapian by default, with French stemming).
+search backend (Xapian by default, with configurable stemming).
 
 Transport: stdio (stdin/stdout for MCP protocol, managed by Claude Code).
 Data: Markdown files in --data-path/entries/, search index in --data-path/index/fr/.
@@ -68,7 +68,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--backend",
         default=_env("BACKEND", "xapian"),
-        help="Search backend: xapian, sqlite, whoosh (env: ENGRAM_BACKEND, default: xapian)",
+        help="Search backend: xapian, sqlite (env: ENGRAM_BACKEND, default: xapian)",
     )
     parser.add_argument(
         "--language",
@@ -144,7 +144,7 @@ def register_tools(
         """
         Search the knowledge base using full-text search.
 
-        Uses Xapian with French stemming. Supports wildcards and spelling
+        Uses Xapian with configurable stemming. Supports wildcards and spelling
         correction. Results ranked by relevance.
 
         Args:

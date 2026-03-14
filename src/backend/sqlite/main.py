@@ -327,10 +327,13 @@ class SQLiteBackend(SearchBackend):
 
         conn = self._connect()
         try:
-            # Drop all existing data
-            conn.execute("DELETE FROM relations")
-            conn.execute("DELETE FROM entries_fts")
-            conn.execute("DELETE FROM entries")
+            # Drop all tables and recreate (contentless FTS5 forbids bulk DELETE)
+            conn.execute("DROP TABLE IF EXISTS relations")
+            conn.execute("DROP TABLE IF EXISTS entries_fts")
+            conn.execute("DROP TABLE IF EXISTS entries")
+            conn.execute(_SQL_CREATE_ENTRIES)
+            conn.execute(_SQL_CREATE_FTS)
+            conn.execute(_SQL_CREATE_RELATIONS)
 
             # Bulk insert all entries
             count = 0
