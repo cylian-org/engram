@@ -39,6 +39,9 @@ DEFAULT_LIST_LIMIT: int = 50
 # Duplicate detection threshold (SequenceMatcher ratio, 0.0-1.0)
 DUPLICATE_THRESHOLD: float = 0.75
 
+# Regex for parsing YAML frontmatter (anchored to start of file, line-start ---)
+_FRONTMATTER_RE: re.Pattern[str] = re.compile(r"\A---\n(.*?)\n---\n(.*)", re.DOTALL)
+
 # Regex for extracting kb:// links with optional #type fragment
 RE_KB_LINK: re.Pattern[str] = re.compile(
     r"\[[^\]]*\]\(kb://([a-f0-9-]+)(?:#([a-zA-Z0-9_-]+))?\)"
@@ -123,20 +126,15 @@ class KnowledgeBase:
             # Unreadable file
             return None
 
-        # Split frontmatter (between --- delimiters) from content
-        if not text.startswith("---"):
-            logger.warning("No frontmatter in %s", filepath)
-            # Missing frontmatter
-            return None
-
-        parts = text.split("---", 2)
-        if len(parts) < 3:
-            logger.warning("Malformed frontmatter in %s", filepath)
-            # Incomplete frontmatter
+        # Parse frontmatter with anchored regex (immune to --- in content)
+        fm_match = _FRONTMATTER_RE.match(text)
+        if not fm_match:
+            logger.warning("No valid frontmatter in %s", filepath)
+            # Missing or malformed frontmatter
             return None
 
         try:
-            meta = yaml.safe_load(parts[1])
+            meta = yaml.safe_load(fm_match.group(1))
         except yaml.YAMLError as exc:
             logger.warning("YAML parse error in %s: %s", filepath, exc)
             # Bad YAML
@@ -147,7 +145,7 @@ class KnowledgeBase:
             # Invalid structure
             return None
 
-        content = parts[2].strip()
+        content = fm_match.group(2).strip()
 
         # Parsed entry
         return {
@@ -161,14 +159,22 @@ class KnowledgeBase:
         """
         Write an entry to a Markdown file with YAML frontmatter.
 
+        Uses write-to-temp-then-rename to avoid leaving partial files on
+        disk if the write fails (disk full, permission error, etc.).
+
         Args:
             entry: Dict with id, title, tags, content.
 
         Returns:
             Path to the written file.
+
+        Errors:
+            Raises OSError if the file cannot be written. Cleans up the
+            temporary file on failure.
         """
 
         filepath = self._entries_path / f"{entry['id']}.md"
+        tmp = filepath.with_suffix(".md.tmp")
 
         frontmatter = yaml.dump(
             {"id": entry["id"], "title": entry["title"], "tags": entry["tags"]},
@@ -178,7 +184,14 @@ class KnowledgeBase:
         ).strip()
 
         text = f"---\n{frontmatter}\n---\n\n{entry['content']}\n"
-        filepath.write_text(text, encoding="utf-8")
+
+        try:
+            tmp.write_text(text, encoding="utf-8")
+            tmp.rename(filepath)
+        except OSError:
+            # Clean up partial temp file
+            tmp.unlink(missing_ok=True)
+            raise
 
         logger.info("Wrote entry %s to %s", entry["id"], filepath)
         # File written
@@ -272,17 +285,23 @@ class KnowledgeBase:
         # Open read-only database
         return xapian.Database(str(self._index_path))
 
-    def _index_entry(self, entry: dict[str, Any]) -> None:
+    def _index_entry_with_db(
+        self, entry: dict[str, Any], db: xapian.WritableDatabase
+    ) -> None:
         """
-        Index or update an entry in Xapian.
+        Index or update an entry in a pre-opened Xapian database.
 
-        Uses replace_document with Q<uuid> as the unique ID term for upsert.
+        Builds a Xapian document with title, tags, content, and relation
+        terms, then upserts it via replace_document with Q<uuid> as the
+        unique ID term.
+
+        Does NOT commit or close the database — the caller is responsible.
 
         Args:
             entry: Dict with id, title, tags, content.
+            db: An already-open WritableDatabase instance.
         """
 
-        db = self._get_writable_db()
         doc = xapian.Document()
 
         # Term generator with French stemmer
@@ -323,10 +342,25 @@ class KnowledgeBase:
         doc.add_boolean_term(id_term)
         db.replace_document(id_term, doc)
 
+        logger.info("Indexed entry %s", entry["id"])
+
+    def _index_entry(self, entry: dict[str, Any]) -> None:
+        """
+        Index or update a single entry in Xapian.
+
+        Opens a WritableDatabase, indexes the entry, commits, and closes.
+        For bulk operations, use _index_entry_with_db() with a shared db.
+
+        Args:
+            entry: Dict with id, title, tags, content.
+        """
+
+        db = self._get_writable_db()
+        self._index_entry_with_db(entry, db)
+
         # Explicit commit to ensure changes are visible to subsequent reads
         db.commit()
         db.close()
-        logger.info("Indexed entry %s", entry["id"])
 
     def _unindex_entry(self, entry_id: str) -> None:
         """
@@ -348,7 +382,9 @@ class KnowledgeBase:
         """
         Rebuild the Xapian index from all Markdown files.
 
-        Deletes the existing index and reindexes every entry file.
+        Opens a single WritableDatabase with DB_CREATE_OR_OVERWRITE (which
+        wipes the existing index) and indexes every valid entry file in one
+        pass. Much faster than opening/closing a db per entry.
 
         Returns:
             Number of entries indexed.
@@ -356,20 +392,23 @@ class KnowledgeBase:
 
         logger.info("Rebuilding index from %s", self._entries_path)
 
-        # Delete existing index
+        # Open once with OVERWRITE to wipe existing index
         db = xapian.WritableDatabase(
             str(self._index_path), xapian.DB_CREATE_OR_OVERWRITE
         )
-        db.close()
 
         count = 0
         for filepath in sorted(self._entries_path.glob("*.md")):
             entry = self._read_entry(filepath)
             if entry and entry["id"]:
-                self._index_entry(entry)
+                self._index_entry_with_db(entry, db)
                 count += 1
             else:
                 logger.warning("Skipped invalid entry: %s", filepath)
+
+        # Single commit for all entries
+        db.commit()
+        db.close()
 
         logger.info("Rebuild complete: %d entries indexed", count)
         # Rebuild done
