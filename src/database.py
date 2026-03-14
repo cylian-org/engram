@@ -1,11 +1,11 @@
 """
-Knowledge Base — Markdown files + Xapian full-text index.
+Knowledge Base — Markdown files + pluggable search backend.
 
 Manages entries stored as Markdown files with YAML frontmatter. Each entry
-has a UUID, title, tags list, and content body. A Xapian index provides
-full-text search with French stemming.
+has a UUID, title, tags list, and content body. A search backend provides
+full-text search (Xapian by default, with French stemming).
 
-Source of truth: the Markdown files. The Xapian index is a rebuildable cache.
+Source of truth: the Markdown files. The search index is a rebuildable cache.
 """
 
 from __future__ import annotations
@@ -17,20 +17,11 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
-import xapian
 import yaml
 
+from backends import SearchBackend, extract_relations
+
 logger = logging.getLogger("engram")
-
-# ---------------------------------------------------------------------------
-# Xapian prefix constants
-# ---------------------------------------------------------------------------
-
-PREFIX_ID: str = "Q"
-PREFIX_TITLE: str = "XTITLE"
-PREFIX_TAG: str = "XTAG"
-PREFIX_RELOUT: str = "XRELOUT:"
-PREFIX_RELTGT: str = "XRELTGT:"
 
 # Default search limit
 DEFAULT_SEARCH_LIMIT: int = 10
@@ -41,11 +32,6 @@ DUPLICATE_THRESHOLD: float = 0.75
 
 # Regex for parsing YAML frontmatter (anchored to start of file, line-start ---)
 _FRONTMATTER_RE: re.Pattern[str] = re.compile(r"\A---\n(.*?)\n---\n(.*)", re.DOTALL)
-
-# Regex for extracting kb:// links with optional #type fragment
-RE_KB_LINK: re.Pattern[str] = re.compile(
-    r"\[[^\]]*\]\(kb://([a-f0-9-]+)(?:#([a-zA-Z0-9_-]+))?\)"
-)
 
 # Regex for validating UUID format (path traversal prevention)
 _UUID_RE: re.Pattern[str] = re.compile(
@@ -73,39 +59,49 @@ def _validate_entry_id(entry_id: str) -> bool:
 
 class KnowledgeBase:
     """
-    Knowledge base backed by Markdown files and a Xapian index.
+    Knowledge base backed by Markdown files and a pluggable search backend.
 
     Args:
         data_path: Root path for knowledge data (contains entries/ and index/).
+        backend: Optional search backend instance. Defaults to XapianBackend.
     """
 
-    def __init__(self, data_path: str) -> None:
+    def __init__(self, data_path: str, backend: SearchBackend | None = None) -> None:
         """
         Initialize the knowledge base.
 
         Args:
             data_path: Root directory for knowledge storage.
+            backend: Search backend instance. When None, creates a
+                XapianBackend at data_path/index/fr/ for backward
+                compatibility.
 
         Errors:
-            Creates entries/ and index/ subdirectories if missing.
+            Creates entries/ subdirectory if missing.
         """
 
         self._data_path = Path(data_path)
         self._entries_path = self._data_path / "entries"
         self._index_path = self._data_path / "index" / "fr"
 
-        # Ensure directories exist
+        # Ensure entries directory exists
         self._entries_path.mkdir(parents=True, exist_ok=True)
-        self._index_path.mkdir(parents=True, exist_ok=True)
 
-        # In-memory metadata cache: entry_id → {title, tags}
+        # Initialize search backend (default: Xapian for backward compat)
+        if backend is None:
+            from backends import XapianBackend
+
+            backend = XapianBackend(self._index_path)
+        self._backend = backend
+
+        # In-memory metadata cache: entry_id -> {title, tags}
         self._meta_cache: dict[str, dict[str, Any]] = {}
         self._load_meta_cache()
 
         logger.info(
-            "KnowledgeBase initialized — entries: %s, index: %s, cached: %d",
+            "KnowledgeBase initialized — entries: %s, backend: %s, cached: %d",
             self._entries_path,
-            self._index_path,
+            type(self._backend).__name__,
             len(self._meta_cache),
         )
 
@@ -274,7 +270,7 @@ class KnowledgeBase:
         return False
 
     # -----------------------------------------------------------------------
-    # Relation extraction
+    # Relation extraction (static — delegates to backends module)
     # -----------------------------------------------------------------------
 
     @staticmethod
@@ -285,6 +281,10 @@ class KnowledgeBase:
         Parses links of the form [label](kb://uuid) or [label](kb://uuid#type).
         When no #type fragment is present, defaults to "related".
 
+        Delegates to backends.extract_relations() — kept as a static method
+        for backward compatibility with tests calling
+        KnowledgeBase._extract_relations().
+
         Args:
             content: Markdown content body.
 
@@ -292,187 +292,11 @@ class KnowledgeBase:
             List of dicts with 'target' (UUID) and 'type' (relation type).
         """
 
-        relations: list[dict[str, str]] = []
-        seen: set[tuple[str, str]] = set()
-
-        for match in RE_KB_LINK.finditer(content):
-            target_id = match.group(1)
-            rel_type = match.group(2) or "related"
-
-            # Deduplicate identical target+type pairs
-            key = (target_id, rel_type)
-            if key in seen:
-                continue
-            seen.add(key)
-
-            relations.append({"target": target_id, "type": rel_type})
-
-        # Extracted
-        return relations
+        # Delegate to shared utility
+        return extract_relations(content)
 
     # -----------------------------------------------------------------------
-    # Xapian index operations
-    # -----------------------------------------------------------------------
-
-    def _get_writable_db(self) -> xapian.WritableDatabase:
-        """
-        Open the Xapian database for writing.
-
-        Returns:
-            A WritableDatabase instance.
-        """
-
-        # Open writable database
-        return xapian.WritableDatabase(str(self._index_path), xapian.DB_CREATE_OR_OPEN)
-
-    def _get_readable_db(self) -> xapian.Database:
-        """
-        Open the Xapian database for reading.
-
-        Returns:
-            A Database instance.
-
-        Errors:
-            Returns None-safe — caller must handle DatabaseOpeningError.
-        """
-
-        # Open read-only database
-        return xapian.Database(str(self._index_path))
-
-    def _index_entry_with_db(
-        self, entry: dict[str, Any], db: xapian.WritableDatabase
-    ) -> None:
-        """
-        Index or update an entry in a pre-opened Xapian database.
-
-        Builds a Xapian document with title, tags, content, and relation
-        terms, then upserts it via replace_document with Q<uuid> as the
-        unique ID term.
-
-        Does NOT commit or close the database — the caller is responsible.
-
-        Args:
-            entry: Dict with id, title, tags, content.
-            db: An already-open WritableDatabase instance.
-        """
-
-        doc = xapian.Document()
-
-        # Term generator with French stemmer
-        tg = xapian.TermGenerator()
-        tg.set_stemmer(xapian.Stem("fr"))
-        tg.set_database(db)
-        tg.set_flags(tg.FLAG_SPELLING)
-        tg.set_document(doc)
-
-        # Index title with higher weight (wdf_inc=5)
-        tg.index_text(entry["title"], 5, PREFIX_TITLE)
-        # Also index title without prefix for general search
-        tg.index_text(entry["title"], 5)
-
-        # Index tags
-        for tag in entry["tags"]:
-            doc.add_boolean_term(f"{PREFIX_TAG}{tag}")
-            # Also index tag text for general search
-            tg.index_text(tag, 1)
-
-        # Index content
-        tg.increase_termpos()
-        tg.index_text(entry["content"], 1)
-
-        # Index outgoing relations from kb:// links in content
-        relations = self._extract_relations(entry["content"])
-        for rel in relations:
-            # Outgoing relation term: allows reading this entry's outgoing links
-            doc.add_boolean_term(f"{PREFIX_RELOUT}{rel['type']}:{rel['target']}")
-            # Target marker term: allows finding all entries that link TO a target
-            doc.add_boolean_term(f"{PREFIX_RELTGT}{rel['target']}")
-
-        # Store data for retrieval (title for snippets)
-        doc.set_data(entry["id"])
-
-        # Unique ID term for upsert
-        id_term = f"{PREFIX_ID}{entry['id']}"
-        doc.add_boolean_term(id_term)
-        db.replace_document(id_term, doc)
-
-        logger.info("Indexed entry %s", entry["id"])
-
-    def _index_entry(self, entry: dict[str, Any]) -> None:
-        """
-        Index or update a single entry in Xapian.
-
-        Opens a WritableDatabase, indexes the entry, commits, and closes.
-        For bulk operations, use _index_entry_with_db() with a shared db.
-
-        Args:
-            entry: Dict with id, title, tags, content.
-        """
-
-        db = self._get_writable_db()
-        self._index_entry_with_db(entry, db)
-
-        # Explicit commit to ensure changes are visible to subsequent reads
-        db.commit()
-        db.close()
-
-    def _unindex_entry(self, entry_id: str) -> None:
-        """
-        Remove an entry from the Xapian index.
-
-        Args:
-            entry_id: UUID of the entry.
-        """
-
-        db = self._get_writable_db()
-        id_term = f"{PREFIX_ID}{entry_id}"
-        db.delete_document(id_term)
-        # Explicit commit to ensure changes are visible to subsequent reads
-        db.commit()
-        db.close()
-        logger.info("Unindexed entry %s", entry_id)
-
-    def rebuild(self) -> int:
-        """
-        Rebuild the Xapian index from all Markdown files.
-
-        Opens a single WritableDatabase with DB_CREATE_OR_OVERWRITE (which
-        wipes the existing index) and indexes every valid entry file in one
-        pass. Much faster than opening/closing a db per entry.
-
-        Returns:
-            Number of entries indexed.
-        """
-
-        logger.info("Rebuilding index from %s", self._entries_path)
-
-        # Open once with OVERWRITE to wipe existing index
-        db = xapian.WritableDatabase(
-            str(self._index_path), xapian.DB_CREATE_OR_OVERWRITE
-        )
-
-        count = 0
-        for filepath in sorted(self._entries_path.glob("*.md")):
-            entry = self._read_entry(filepath)
-            if entry and entry["id"]:
-                self._index_entry_with_db(entry, db)
-                count += 1
-            else:
-                logger.warning("Skipped invalid entry: %s", filepath)
-
-        # Single commit for all entries
-        db.commit()
-        db.close()
-
-        # Reload metadata cache to stay in sync
-        self._load_meta_cache()
-
-        logger.info("Rebuild complete: %d entries indexed", count)
-        # Rebuild done
-        return count
-
-    # -----------------------------------------------------------------------
-    # CRUD operations (file + index)
+    # CRUD operations (file + backend)
     # -----------------------------------------------------------------------
 
     def remember(
@@ -487,11 +311,11 @@ class KnowledgeBase:
         Upsert an entry: update if it exists, create if it doesn't.
 
         Resolution order:
-        1. If entry_id is provided → update that entry
-        2. If no entry_id → search for similar titles
-           - If a match is found above threshold → update the best match
-           - If no match → create a new entry
-        3. If force=True → always create new (skip duplicate detection)
+        1. If entry_id is provided -> update that entry
+        2. If no entry_id -> search for similar titles
+           - If a match is found above threshold -> update the best match
+           - If no match -> create a new entry
+        3. If force=True -> always create new (skip duplicate detection)
 
         Args:
             title: Entry title.
@@ -506,7 +330,7 @@ class KnowledgeBase:
 
         tags = _normalize_tags(tags)
 
-        # Case 1: explicit ID → update
+        # Case 1: explicit ID -> update
         if entry_id:
             if not _validate_entry_id(entry_id):
                 logger.warning("Invalid entry_id rejected: %s", entry_id)
@@ -524,7 +348,7 @@ class KnowledgeBase:
             existing["tags"] = tags
 
             self._write_entry(existing)
-            self._index_entry(existing)
+            self._backend.index(existing)
             self._update_meta_cache(entry_id, title, tags)
 
             logger.info("Updated entry %s: %s", entry_id, title)
@@ -544,7 +368,7 @@ class KnowledgeBase:
                     best_entry["tags"] = tags
 
                     self._write_entry(best_entry)
-                    self._index_entry(best_entry)
+                    self._backend.index(best_entry)
                     self._update_meta_cache(best["id"], title, tags)
 
                     logger.info(
@@ -572,7 +396,7 @@ class KnowledgeBase:
         }
 
         self._write_entry(entry)
-        self._index_entry(entry)
+        self._backend.index(entry)
         self._update_meta_cache(entry_id, title, tags)
 
         logger.info("Created new entry %s: %s", entry_id, title)
@@ -618,10 +442,8 @@ class KnowledgeBase:
         """
         Get all graph relations for an entry (outgoing and incoming).
 
-        Outgoing relations are read from the entry's Xapian document terms
-        (XRELOUT:{type}:{target_id}). Incoming relations (backlinks) are found
-        by searching for documents that have XRELTGT:{entry_id} terms, then
-        reading their XRELOUT terms to extract the relation type.
+        Delegates to the search backend for raw relation data (id + type),
+        then resolves titles from the metadata cache or Markdown files.
 
         Args:
             entry_id: UUID of the entry.
@@ -636,77 +458,20 @@ class KnowledgeBase:
             # Invalid ID format
             return {"out": [], "in": []}
 
+        # Get raw relations from backend (id + type only)
+        raw = self._backend.get_relations(entry_id)
+
+        # Resolve titles for outgoing relations
         out: list[dict[str, str]] = []
+        for rel in raw["out"]:
+            title = self._resolve_title(rel["id"])
+            out.append({"type": rel["type"], "id": rel["id"], "title": title})
+
+        # Resolve titles for incoming relations
         incoming: list[dict[str, str]] = []
-
-        try:
-            db = self._get_readable_db()
-        except xapian.DatabaseOpeningError:
-            logger.warning("Index not found — returning empty relations")
-            # No index
-            return {"out": out, "in": incoming}
-
-        # --- Outgoing relations ---
-        # Find the document for this entry by its Q-term
-        id_term = f"{PREFIX_ID}{entry_id}"
-        postlist = db.postlist(id_term)
-        try:
-            posting = next(postlist)
-            doc = db.get_document(posting.docid)
-
-            # Read all XRELOUT: terms from this document
-            for term_item in doc:
-                term = term_item.term.decode("utf-8")
-                if term.startswith(PREFIX_RELOUT):
-                    # Parse "XRELOUT:{type}:{target_id}"
-                    remainder = term[len(PREFIX_RELOUT) :]
-                    colon_pos = remainder.find(":")
-                    if colon_pos == -1:
-                        continue
-                    rel_type = remainder[:colon_pos]
-                    target_id = remainder[colon_pos + 1 :]
-
-                    # Resolve target title from file
-                    target_title = self._resolve_title(target_id)
-                    out.append(
-                        {"type": rel_type, "id": target_id, "title": target_title}
-                    )
-        except StopIteration:
-            # Entry not in index — no outgoing relations
-            pass
-
-        # --- Incoming relations (backlinks) ---
-        # Find all documents that have XRELTGT:{entry_id} term
-        tgt_term = f"{PREFIX_RELTGT}{entry_id}"
-        for posting in db.postlist(tgt_term):
-            source_doc = db.get_document(posting.docid)
-            source_id = source_doc.get_data().decode("utf-8")
-
-            # Skip self-references
-            if source_id == entry_id:
-                continue
-
-            # Find the relation type(s) from this source pointing to entry_id
-            for term_item in source_doc:
-                term = term_item.term.decode("utf-8")
-                if not term.startswith(PREFIX_RELOUT):
-                    continue
-                # Parse "XRELOUT:{type}:{target_id}"
-                remainder = term[len(PREFIX_RELOUT) :]
-                colon_pos = remainder.find(":")
-                if colon_pos == -1:
-                    continue
-                rel_type = remainder[:colon_pos]
-                target_id = remainder[colon_pos + 1 :]
-
-                # Only include if this relation points to our entry
-                if target_id != entry_id:
-                    continue
-
-                source_title = self._resolve_title(source_id)
-                incoming.append(
-                    {"type": rel_type, "id": source_id, "title": source_title}
-                )
+        for rel in raw["in"]:
+            title = self._resolve_title(rel["id"])
+            incoming.append({"type": rel["type"], "id": rel["id"], "title": title})
 
         # Relations resolved
         return {"out": out, "in": incoming}
@@ -775,8 +540,8 @@ class KnowledgeBase:
         self._remove_from_meta_cache(entry_id)
 
         try:
-            self._unindex_entry(entry_id)
-        except xapian.DocNotFoundError:
+            self._backend.unindex(entry_id)
+        except Exception:
             logger.warning("Entry %s not in index (already removed?)", entry_id)
 
         logger.info("Deleted entry %s", entry_id)
@@ -796,6 +561,9 @@ class KnowledgeBase:
         """
         Full-text search with optional tag filtering.
 
+        Delegates to the search backend for raw results (id + score),
+        then enriches with title, tags, and snippets from Markdown files.
+
         Args:
             query_str: Search query string.
             tags: Optional list of tags to filter by (AND logic).
@@ -805,41 +573,16 @@ class KnowledgeBase:
             List of dicts with id, title, tags, snippet, score.
         """
 
-        try:
-            db = self._get_readable_db()
-        except xapian.DatabaseOpeningError:
-            logger.warning("Index not found — returning empty results")
-            # No index
-            return []
+        # Normalize tags before passing to backend
+        normalized_tags = _normalize_tags(tags) if tags else None
 
-        # Query parser with French stemmer
-        qp = xapian.QueryParser()
-        qp.set_stemmer(xapian.Stem("fr"))
-        qp.set_stemming_strategy(qp.STEM_SOME)
-        qp.set_database(db)
+        # Get raw search results from backend (id + score)
+        raw_results = self._backend.search(query_str, normalized_tags, limit)
 
-        # Allow prefix searches
-        qp.add_prefix("title", PREFIX_TITLE)
-        qp.add_prefix("tag", PREFIX_TAG)
-
-        flags = qp.FLAG_DEFAULT | qp.FLAG_SPELLING_CORRECTION | qp.FLAG_WILDCARD
-        query = qp.parse_query(query_str, flags)
-
-        # Apply tag filter if specified
-        if tags:
-            tag_queries = [
-                xapian.Query(f"{PREFIX_TAG}{t}") for t in _normalize_tags(tags)
-            ]
-            tag_query = xapian.Query(xapian.Query.OP_AND, tag_queries)
-            query = xapian.Query(xapian.Query.OP_FILTER, query, tag_query)
-
-        enquire = xapian.Enquire(db)
-        enquire.set_query(query)
-
-        results = []
-        for match in enquire.get_mset(0, limit):
-            entry_id = match.document.get_data().decode("utf-8")
-            entry = self.get(entry_id)
+        # Enrich results with entry data from Markdown files
+        results: list[dict[str, Any]] = []
+        for hit in raw_results:
+            entry = self.get(hit["id"])
             if entry:
                 # Build snippet (first 200 chars of content)
                 snippet = entry["content"][:200]
@@ -852,7 +595,7 @@ class KnowledgeBase:
                         "title": entry["title"],
                         "tags": entry["tags"],
                         "snippet": snippet,
-                        "score": match.percent,
+                        "score": hit["score"],
                     }
                 )
 
@@ -860,13 +603,45 @@ class KnowledgeBase:
         # Search complete
         return results
 
+    def rebuild(self) -> int:
+        """
+        Rebuild the search index from all Markdown files.
+
+        Reads all valid entry files, collects them, and passes the full
+        list to the backend for a single-pass rebuild.
+
+        Returns:
+            Number of entries indexed.
+        """
+
+        logger.info("Rebuilding index from %s", self._entries_path)
+
+        # Collect all valid entries from Markdown files
+        entries: list[dict[str, Any]] = []
+        for filepath in sorted(self._entries_path.glob("*.md")):
+            entry = self._read_entry(filepath)
+            if entry and entry["id"]:
+                entries.append(entry)
+            else:
+                logger.warning("Skipped invalid entry: %s", filepath)
+
+        # Delegate bulk indexing to backend
+        count = self._backend.rebuild(entries)
+
+        # Reload metadata cache to stay in sync
+        self._load_meta_cache()
+
+        logger.info("Rebuild complete: %d entries indexed", count)
+        # Rebuild done
+        return count
+
     def find_similar(self, title: str, limit: int = 5) -> list[dict[str, Any]]:
         """
         Find entries with similar titles (for duplicate detection).
 
         Uses SequenceMatcher on normalized titles for reliable comparison,
-        independent of Xapian stemming/scoring quirks. Reads from the
-        in-memory metadata cache instead of scanning files on disk.
+        independent of search backend stemming/scoring quirks. Reads from
+        the in-memory metadata cache instead of scanning files on disk.
 
         Args:
             title: Title to check against existing entries.

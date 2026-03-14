@@ -2,20 +2,22 @@
 Engram — persistent knowledge base MCP server with full-text search.
 
 Provides MCP tools for storing, searching, and managing knowledge entries.
-Entries are Markdown files with YAML frontmatter, indexed by Xapian with
-French stemming for full-text search.
+Entries are Markdown files with YAML frontmatter, indexed by a pluggable
+search backend (Xapian by default, with French stemming).
 
 Transport: stdio (stdin/stdout for MCP protocol, managed by Claude Code).
-Data: Markdown files in --data-path/entries/, Xapian index in --data-path/index/fr/.
+Data: Markdown files in --data-path/entries/, search index in --data-path/index/fr/.
 """
 
 from __future__ import annotations
 
 import argparse
 import logging
+from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
+from backends import XapianBackend
 from database import KnowledgeBase
 
 # ---------------------------------------------------------------------------
@@ -343,7 +345,8 @@ def main() -> None:
     logger = setup_logging(args.log_file)
 
     logger.info("Initializing knowledge base from %s", args.data_path)
-    kb = KnowledgeBase(args.data_path)
+    backend = XapianBackend(Path(args.data_path) / "index" / "fr")
+    kb = KnowledgeBase(args.data_path, backend=backend)
     logger.info("Knowledge base ready")
 
     mcp = FastMCP(name="Engram", host=args.host, port=args.port)
