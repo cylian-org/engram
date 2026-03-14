@@ -28,7 +28,8 @@ def parse_args() -> argparse.Namespace:
     Parse command-line arguments.
 
     Returns:
-        Parsed arguments namespace with data-path and log-file.
+        Parsed arguments namespace with data-path, log-file, transport,
+        host, and port.
     """
 
     parser = argparse.ArgumentParser(description="Engram (stdio)")
@@ -64,14 +65,12 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-args = parse_args()
-
 # ---------------------------------------------------------------------------
 # Logging setup
 # ---------------------------------------------------------------------------
 
 
-def setup_logging(log_file: str) -> logging.Logger:
+def setup_logging(log_file: str | None) -> logging.Logger:
     """
     Configure the application logger.
 
@@ -79,7 +78,7 @@ def setup_logging(log_file: str) -> logging.Logger:
     transport). Uses a consistent format with timestamps.
 
     Args:
-        log_file: Path to the log file.
+        log_file: Path to the log file, or None for stderr.
 
     Returns:
         Configured logger instance.
@@ -98,7 +97,7 @@ def setup_logging(log_file: str) -> logging.Logger:
 
     if log_file:
         # File handler (explicit path)
-        handler = logging.FileHandler(log_file, encoding="utf-8")
+        handler: logging.Handler = logging.FileHandler(log_file, encoding="utf-8")
     else:
         # Stderr handler (default)
         handler = logging.StreamHandler()
@@ -110,232 +109,252 @@ def setup_logging(log_file: str) -> logging.Logger:
     return log
 
 
-logger = setup_logging(args.log_file)
-
 # ---------------------------------------------------------------------------
-# Knowledge base initialization
-# ---------------------------------------------------------------------------
-
-logger.info("Initializing knowledge base from %s", args.data_path)
-kb = KnowledgeBase(args.data_path)
-logger.info("Knowledge base ready")
-
-# ---------------------------------------------------------------------------
-# MCP Server
-# ---------------------------------------------------------------------------
-
-mcp = FastMCP(name="Engram", host=args.host, port=args.port)
-
-# ---------------------------------------------------------------------------
-# Tools
+# Tool registration
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool()
-def search(
-    query: str,
-    tags: list[str] | None = None,
-    limit: int = 10,
-) -> dict:
+def register_tools(
+    mcp: FastMCP,
+    kb: KnowledgeBase,
+    logger: logging.Logger,
+) -> None:
     """
-    Search the knowledge base using full-text search.
+    Register all MCP tools on the given server instance.
 
-    Uses Xapian with French stemming. Supports wildcards and spelling
-    correction. Results ranked by relevance.
+    Each tool function is defined as a closure capturing kb and logger
+    from the enclosing scope.
 
     Args:
-        query: Search query string.
-        tags: Optional tag filter (AND logic — all tags must match).
-        limit: Maximum results to return (default: 10).
-
-    Returns:
-        Dict with results list (id, title, tags, snippet, score).
+        mcp: FastMCP server instance to register tools on.
+        kb: KnowledgeBase instance for data operations.
+        logger: Logger instance for request logging.
     """
 
-    # Clamp limit to valid range
-    limit = max(1, min(limit, 100))
+    @mcp.tool()
+    def search(
+        query: str,
+        tags: list[str] | None = None,
+        limit: int = 10,
+    ) -> dict:
+        """
+        Search the knowledge base using full-text search.
 
-    logger.info("search: query='%s', tags=%s, limit=%d", query, tags, limit)
+        Uses Xapian with French stemming. Supports wildcards and spelling
+        correction. Results ranked by relevance.
 
-    results = kb.search(query, tags=tags, limit=limit)
+        Args:
+            query: Search query string.
+            tags: Optional tag filter (AND logic — all tags must match).
+            limit: Maximum results to return (default: 10).
 
-    # Search done
-    return {"count": len(results), "results": results}
+        Returns:
+            Dict with results list (id, title, tags, snippet, score).
+        """
 
+        # Clamp limit to valid range
+        limit = max(1, min(limit, 100))
 
-@mcp.tool()
-def recall(entry_id: str) -> dict:
-    """
-    Read the full content of a knowledge base entry.
+        logger.info("search: query='%s', tags=%s, limit=%d", query, tags, limit)
 
-    Also returns graph relations: outgoing links (from kb://uuid#type
-    in content) and incoming backlinks (other articles linking here).
+        results = kb.search(query, tags=tags, limit=limit)
 
-    Args:
-        entry_id: UUID of the entry.
+        # Search done
+        return {"count": len(results), "results": results}
 
-    Returns:
-        Dict with id, title, tags, content, relations — or error if not found.
-        Relations has 'out' and 'in' lists, each with type, id, title.
-    """
+    @mcp.tool()
+    def recall(entry_id: str) -> dict:
+        """
+        Read the full content of a knowledge base entry.
 
-    logger.info("recall: id=%s", entry_id)
+        Also returns graph relations: outgoing links (from kb://uuid#type
+        in content) and incoming backlinks (other articles linking here).
 
-    entry = kb.get(entry_id, with_relations=True)
-    if not entry:
-        # Not found
-        return {"error": f"Entry {entry_id} not found"}
+        Args:
+            entry_id: UUID of the entry.
 
-    # Entry retrieved
-    return entry
+        Returns:
+            Dict with id, title, tags, content, relations — or error if not found.
+            Relations has 'out' and 'in' lists, each with type, id, title.
+        """
 
+        logger.info("recall: id=%s", entry_id)
 
-@mcp.tool()
-def remember(
-    title: str,
-    content: str,
-    tags: list[str],
-    entry_id: str | None = None,
-    force: bool = False,
-) -> dict:
-    """
-    Store or update a knowledge base entry (upsert).
+        entry = kb.get(entry_id, with_relations=True)
+        if not entry:
+            # Not found
+            return {"error": f"Entry {entry_id} not found"}
 
-    Resolution order:
-    1. If entry_id is provided → update that entry
-    2. If no entry_id → search for similar titles
-       - If a match is found → update the best match
-       - If no match → create a new entry
-    3. If force=True → always create new (skip duplicate detection)
+        # Entry retrieved
+        return entry
 
-    Best practice: prefer small, focused articles over large monolithic
-    ones. Each article should cover one complete, atomic piece of
-    knowledge. Use links to connect related articles rather than
-    cramming everything into a single entry. This keeps articles
-    self-sufficient, searchable, and easy to update independently.
+    @mcp.tool()
+    def remember(
+        title: str,
+        content: str,
+        tags: list[str],
+        entry_id: str | None = None,
+        force: bool = False,
+    ) -> dict:
+        """
+        Store or update a knowledge base entry (upsert).
 
-    Content may contain links to other entries using the format
-    [label](kb://uuid#type) where type is the relation kind (e.g.
-    runs-on, depends-on, mirrors). These links are automatically
-    indexed as graph relations, queryable via recall.
+        Resolution order:
+        1. If entry_id is provided -> update that entry
+        2. If no entry_id -> search for similar titles
+           - If a match is found -> update the best match
+           - If no match -> create a new entry
+        3. If force=True -> always create new (skip duplicate detection)
 
-    Args:
-        title: Entry title.
-        content: Entry body (Markdown).
-        tags: List of tags for categorization.
-        entry_id: Optional UUID of an existing entry to update.
-        force: Skip duplicate detection and always create new.
+        Best practice: prefer small, focused articles over large monolithic
+        ones. Each article should cover one complete, atomic piece of
+        knowledge. Use links to connect related articles rather than
+        cramming everything into a single entry. This keeps articles
+        self-sufficient, searchable, and easy to update independently.
 
-    Returns:
-        Dict with id, title, and action ('created' or 'updated').
-    """
+        Content may contain links to other entries using the format
+        [label](kb://uuid#type) where type is the relation kind (e.g.
+        runs-on, depends-on, mirrors). These links are automatically
+        indexed as graph relations, queryable via recall.
 
-    logger.info(
-        "remember: title='%s', tags=%s, entry_id=%s, force=%s",
-        title,
-        tags,
-        entry_id,
-        force,
-    )
+        Args:
+            title: Entry title.
+            content: Entry body (Markdown).
+            tags: List of tags for categorization.
+            entry_id: Optional UUID of an existing entry to update.
+            force: Skip duplicate detection and always create new.
 
-    result = kb.remember(title, content, tags, entry_id=entry_id, force=force)
+        Returns:
+            Dict with id, title, and action ('created' or 'updated').
+        """
 
-    # Remember done
-    return result
+        logger.info(
+            "remember: title='%s', tags=%s, entry_id=%s, force=%s",
+            title,
+            tags,
+            entry_id,
+            force,
+        )
 
+        result = kb.remember(title, content, tags, entry_id=entry_id, force=force)
 
-@mcp.tool()
-def forget(entry_id: str) -> dict:
-    """
-    Delete a knowledge base entry (file and index).
+        # Remember done
+        return result
 
-    Args:
-        entry_id: UUID of the entry to delete.
+    @mcp.tool()
+    def forget(entry_id: str) -> dict:
+        """
+        Delete a knowledge base entry (file and index).
 
-    Returns:
-        Dict with success status or error if not found.
-    """
+        Args:
+            entry_id: UUID of the entry to delete.
 
-    logger.info("forget: id=%s", entry_id)
+        Returns:
+            Dict with success status or error if not found.
+        """
 
-    success = kb.delete(entry_id)
-    if not success:
-        # Not found
-        return {"error": f"Entry {entry_id} not found"}
+        logger.info("forget: id=%s", entry_id)
 
-    # Forgotten
-    return {"success": True, "id": entry_id}
+        success = kb.delete(entry_id)
+        if not success:
+            # Not found
+            return {"error": f"Entry {entry_id} not found"}
 
+        # Forgotten
+        return {"success": True, "id": entry_id}
 
-@mcp.tool(name="list")
-def list_entries(
-    tags: list[str] | None = None,
-    limit: int = 50,
-) -> dict:
-    """
-    List knowledge base entries, sorted by title.
+    @mcp.tool(name="list")
+    def list_entries(
+        tags: list[str] | None = None,
+        limit: int = 50,
+    ) -> dict:
+        """
+        List knowledge base entries, sorted by title.
 
-    Args:
-        tags: Optional tag filter (AND logic — all tags must match).
-        limit: Maximum entries to return (default: 50).
+        Args:
+            tags: Optional tag filter (AND logic — all tags must match).
+            limit: Maximum entries to return (default: 50).
 
-    Returns:
-        Dict with entries list (id, title, tags).
-    """
+        Returns:
+            Dict with entries list (id, title, tags).
+        """
 
-    # Clamp limit to valid range
-    limit = max(1, min(limit, 500))
+        # Clamp limit to valid range
+        limit = max(1, min(limit, 500))
 
-    logger.info("list: tags=%s, limit=%d", tags, limit)
+        logger.info("list: tags=%s, limit=%d", tags, limit)
 
-    entries = kb.list_entries(tags=tags, limit=limit)
+        entries = kb.list_entries(tags=tags, limit=limit)
 
-    # Listed
-    return {"count": len(entries), "entries": entries}
+        # Listed
+        return {"count": len(entries), "entries": entries}
 
+    @mcp.tool()
+    def tags() -> dict:
+        """
+        List all tags in the knowledge base with entry counts.
 
-@mcp.tool()
-def tags() -> dict:
-    """
-    List all tags in the knowledge base with entry counts.
+        Returns:
+            Dict with tags list (tag, count), sorted by count descending.
+        """
 
-    Returns:
-        Dict with tags list (tag, count), sorted by count descending.
-    """
+        logger.info("tags")
 
-    logger.info("tags")
+        tag_list = kb.list_tags()
 
-    tag_list = kb.list_tags()
+        # Tags listed
+        return {"count": len(tag_list), "tags": tag_list}
 
-    # Tags listed
-    return {"count": len(tag_list), "tags": tag_list}
+    @mcp.tool()
+    def rebuild() -> dict:
+        """
+        Rebuild the Xapian search index from Markdown files.
 
+        Deletes the existing index and reindexes all entries. Use this
+        if the index is corrupted or after manual file changes.
 
-@mcp.tool()
-def rebuild() -> dict:
-    """
-    Rebuild the Xapian search index from Markdown files.
+        Returns:
+            Dict with number of entries indexed.
+        """
 
-    Deletes the existing index and reindexes all entries. Use this
-    if the index is corrupted or after manual file changes.
+        logger.info("rebuild: starting full rebuild")
 
-    Returns:
-        Dict with number of entries indexed.
-    """
+        count = kb.rebuild()
 
-    logger.info("rebuild: starting full rebuild")
-
-    count = kb.rebuild()
-
-    logger.info("rebuild: complete — %d entries", count)
-    # Rebuild done
-    return {"success": True, "entries_indexed": count}
+        logger.info("rebuild: complete — %d entries", count)
+        # Rebuild done
+        return {"success": True, "entries_indexed": count}
 
 
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
-if __name__ == "__main__":
+
+def main() -> None:
+    """
+    Application entry point.
+
+    Parses CLI arguments, sets up logging, initializes the knowledge base,
+    registers MCP tools, and starts the server. No side effects on import.
+    """
+
+    args = parse_args()
+    logger = setup_logging(args.log_file)
+
+    logger.info("Initializing knowledge base from %s", args.data_path)
+    kb = KnowledgeBase(args.data_path)
+    logger.info("Knowledge base ready")
+
+    mcp = FastMCP(name="Engram", host=args.host, port=args.port)
+
+    # Register all tools using kb and mcp
+    register_tools(mcp, kb, logger)
+
     logger.info("Starting Engram (%s transport)", args.transport)
+    # Run server
     mcp.run(transport=args.transport)
+
+
+if __name__ == "__main__":
+    main()

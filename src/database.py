@@ -98,11 +98,65 @@ class KnowledgeBase:
         self._entries_path.mkdir(parents=True, exist_ok=True)
         self._index_path.mkdir(parents=True, exist_ok=True)
 
+        # In-memory metadata cache: entry_id → {title, tags}
+        self._meta_cache: dict[str, dict[str, Any]] = {}
+        self._load_meta_cache()
+
         logger.info(
-            "KnowledgeBase initialized — entries: %s, index: %s",
+            "KnowledgeBase initialized — entries: %s, index: %s, cached: %d",
             self._entries_path,
             self._index_path,
+            len(self._meta_cache),
         )
+
+    # -----------------------------------------------------------------------
+    # Metadata cache
+    # -----------------------------------------------------------------------
+
+    def _load_meta_cache(self) -> None:
+        """
+        Load title and tags for all entries into memory.
+
+        Scans all .md files once on init. Subsequent reads of metadata
+        (find_similar, list_entries, list_tags, _resolve_title) use the
+        cache instead of hitting disk.
+        """
+
+        self._meta_cache.clear()
+        for filepath in self._entries_path.glob("*.md"):
+            entry = self._read_entry(filepath)
+            if entry and entry["id"]:
+                self._meta_cache[entry["id"]] = {
+                    "title": entry["title"],
+                    "tags": entry["tags"],
+                }
+
+        # Cache loaded
+        logger.info("Metadata cache loaded: %d entries", len(self._meta_cache))
+
+    def _update_meta_cache(self, entry_id: str, title: str, tags: list[str]) -> None:
+        """
+        Update or insert a single entry in the metadata cache.
+
+        Args:
+            entry_id: UUID of the entry.
+            title: Entry title.
+            tags: Normalized tag list.
+        """
+
+        # Upsert cache entry
+        self._meta_cache[entry_id] = {"title": title, "tags": tags}
+
+    def _remove_from_meta_cache(self, entry_id: str) -> None:
+        """
+        Remove an entry from the metadata cache.
+
+        Args:
+            entry_id: UUID of the entry (no-op if absent).
+        """
+
+        # Remove if present
+        self._meta_cache.pop(entry_id, None)
 
     # -----------------------------------------------------------------------
     # Markdown file operations
@@ -410,6 +464,9 @@ class KnowledgeBase:
         db.commit()
         db.close()
 
+        # Reload metadata cache to stay in sync
+        self._load_meta_cache()
+
         logger.info("Rebuild complete: %d entries indexed", count)
         # Rebuild done
         return count
@@ -468,6 +525,7 @@ class KnowledgeBase:
 
             self._write_entry(existing)
             self._index_entry(existing)
+            self._update_meta_cache(entry_id, title, tags)
 
             logger.info("Updated entry %s: %s", entry_id, title)
             # Updated
@@ -487,6 +545,7 @@ class KnowledgeBase:
 
                     self._write_entry(best_entry)
                     self._index_entry(best_entry)
+                    self._update_meta_cache(best["id"], title, tags)
 
                     logger.info(
                         "Updated existing entry %s (similarity %d%%): %s",
@@ -514,6 +573,7 @@ class KnowledgeBase:
 
         self._write_entry(entry)
         self._index_entry(entry)
+        self._update_meta_cache(entry_id, title, tags)
 
         logger.info("Created new entry %s: %s", entry_id, title)
         # Entry created
@@ -653,13 +713,15 @@ class KnowledgeBase:
 
     def _resolve_title(self, entry_id: str) -> str:
         """
-        Read the title of an entry from its Markdown file.
+        Resolve the title of an entry, using the metadata cache first.
+
+        Falls back to reading the Markdown file if the entry is not cached.
 
         Args:
             entry_id: UUID of the entry.
 
         Returns:
-            Entry title, or "(unknown)" if the file cannot be read.
+            Entry title, or "(unknown)" if not found.
         """
 
         if not _validate_entry_id(entry_id):
@@ -667,6 +729,13 @@ class KnowledgeBase:
             # Invalid ID format
             return "(unknown)"
 
+        # Check cache first
+        cached = self._meta_cache.get(entry_id)
+        if cached:
+            # Title from cache
+            return cached["title"]
+
+        # Fallback to disk (entry may not be cached yet)
         filepath = self._entries_path / f"{entry_id}.md"
         if not filepath.exists():
             # Missing file
@@ -677,7 +746,7 @@ class KnowledgeBase:
             # Unparseable file
             return "(unknown)"
 
-        # Title resolved
+        # Title resolved from disk
         return entry["title"]
 
     def delete(self, entry_id: str) -> bool:
@@ -703,6 +772,7 @@ class KnowledgeBase:
             return False
 
         self._delete_entry_file(entry_id)
+        self._remove_from_meta_cache(entry_id)
 
         try:
             self._unindex_entry(entry_id)
@@ -795,7 +865,8 @@ class KnowledgeBase:
         Find entries with similar titles (for duplicate detection).
 
         Uses SequenceMatcher on normalized titles for reliable comparison,
-        independent of Xapian stemming/scoring quirks.
+        independent of Xapian stemming/scoring quirks. Reads from the
+        in-memory metadata cache instead of scanning files on disk.
 
         Args:
             title: Title to check against existing entries.
@@ -808,20 +879,16 @@ class KnowledgeBase:
         normalized_title = title.lower().strip()
         similar = []
 
-        for filepath in self._entries_path.glob("*.md"):
-            entry = self._read_entry(filepath)
-            if not entry or not entry["id"]:
-                continue
-
+        for entry_id, meta in self._meta_cache.items():
             ratio = SequenceMatcher(
-                None, normalized_title, entry["title"].lower().strip()
+                None, normalized_title, meta["title"].lower().strip()
             ).ratio()
 
             if ratio >= DUPLICATE_THRESHOLD:
                 similar.append(
                     {
-                        "id": entry["id"],
-                        "title": entry["title"],
+                        "id": entry_id,
+                        "title": meta["title"],
                         "score": int(ratio * 100),
                     }
                 )
@@ -844,6 +911,9 @@ class KnowledgeBase:
         """
         List entries sorted by title, with optional tag filter.
 
+        Reads from the in-memory metadata cache instead of scanning
+        files on disk.
+
         Args:
             tags: Optional list of tags to filter by (AND logic).
             limit: Maximum number of entries.
@@ -855,20 +925,16 @@ class KnowledgeBase:
         filter_tags = set(_normalize_tags(tags)) if tags else None
 
         entries = []
-        for filepath in sorted(self._entries_path.glob("*.md")):
-            entry = self._read_entry(filepath)
-            if not entry or not entry["id"]:
-                continue
-
+        for entry_id, meta in self._meta_cache.items():
             # Apply tag filter
-            if filter_tags and not filter_tags.issubset(set(entry["tags"])):
+            if filter_tags and not filter_tags.issubset(set(meta["tags"])):
                 continue
 
             entries.append(
                 {
-                    "id": entry["id"],
-                    "title": entry["title"],
-                    "tags": entry["tags"],
+                    "id": entry_id,
+                    "title": meta["title"],
+                    "tags": meta["tags"],
                 }
             )
 
@@ -882,17 +948,17 @@ class KnowledgeBase:
         """
         List all tags with their entry counts.
 
+        Reads from the in-memory metadata cache instead of scanning
+        files on disk.
+
         Returns:
             List of dicts with tag and count, sorted by count descending.
         """
 
         tag_counts: dict[str, int] = {}
 
-        for filepath in self._entries_path.glob("*.md"):
-            entry = self._read_entry(filepath)
-            if not entry:
-                continue
-            for tag in entry["tags"]:
+        for meta in self._meta_cache.values():
+            for tag in meta["tags"]:
                 tag_counts[tag] = tag_counts.get(tag, 0) + 1
 
         result = [{"tag": tag, "count": count} for tag, count in tag_counts.items()]
