@@ -89,6 +89,55 @@ and depends on [PostgreSQL](kb://f9e8d7c6-...#depends-on).
 
 Like [HATEOAS](https://en.wikipedia.org/wiki/HATEOAS) for knowledge — every response carries the links to navigate the graph.
 
+## Usage Examples
+
+### Store knowledge
+
+Ask your agent:
+
+> "Remember that our API runs on port 8080 and depends on PostgreSQL 15."
+
+Engram creates a Markdown file with a unique UUID, indexes it, and confirms. The agent can now recall this fact in any future session.
+
+### Search
+
+> "What do we know about PostgreSQL?"
+
+Engram searches across all entries by content, title, and tags. Results are ranked by relevance.
+
+### Navigate the graph
+
+> "What depends on PostgreSQL?"
+
+If entries link to the PostgreSQL article with `kb://uuid#depends-on`, Engram returns all backlinks — showing every service that depends on it, without the agent having to search for each one.
+
+### Share knowledge across agents
+
+Start Engram with SSE or HTTP transport. Multiple agents — even from different providers (Claude, ChatGPT, Copilot) — connect to the same server. What one agent remembers, all others can recall.
+
+```
+Agent A: "Remember that the deploy key rotates every 90 days."
+Agent B: "When does the deploy key expire?"
+→ Agent B finds the answer immediately.
+```
+
+## Prompt Your Agent
+
+Add this to your system prompt or project instructions to make your agent use Engram as a reflex, not an afterthought:
+
+```
+Engram is your persistent memory. Using it is mandatory, not optional.
+
+Before working on any topic: search Engram first. Always. Even if you think you know.
+Before answering a question about infrastructure or architecture: search first.
+Before proposing a solution: check if a past decision exists in Engram.
+
+After resolving a diagnostic: remember the root cause and the fix.
+After executing a procedure: remember the steps.
+After making an architecture decision: remember the choice and the rationale.
+After discovering something about the infrastructure: remember it.
+```
+
 ## Configuration
 
 All options have `ENGRAM_*` environment variable fallbacks. CLI args take priority.

@@ -514,6 +514,24 @@ class KnowledgeBase:
         # Title resolved from disk
         return entry["title"]
 
+    def entry_path(self, entry_id: str) -> Path | None:
+        """
+        Return the filesystem path for an entry.
+
+        Args:
+            entry_id: UUID of the entry.
+
+        Returns:
+            Path to the Markdown file, or None if invalid ID.
+        """
+
+        if not _validate_entry_id(entry_id):
+            # Invalid ID format
+            return None
+
+        # Entry path resolved
+        return self._entries_path / f"{entry_id}.md"
+
     def delete(self, entry_id: str) -> bool:
         """
         Delete an entry (file + index).
