@@ -11,7 +11,7 @@ mirror:github:
     - git clone "${CI_REPOSITORY_URL}" repo
     - cd repo
     - git checkout "${CI_COMMIT_TAG}"
-    - rm -rf ci/ .gitlab-ci.yml
+    - rm -rf ci/ .gitlab-ci.yml CLAUDE.md
     - git add -A
     - git -c user.name="CI" -c user.email="ci@cylian.org" commit -m "Release ${CI_COMMIT_TAG}" --allow-empty
     - git tag -f "${CI_COMMIT_TAG}"
