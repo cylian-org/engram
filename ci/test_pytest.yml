@@ -5,10 +5,11 @@ test:pytest:
   stage: test
   image: python:3.13-slim
   before_script:
-    - pip install --quiet pytest==8.4.1
+    - pip install --quiet pytest==8.4.1 coverage==7.8.0
     - pip install --quiet -r src/requirements.txt
   script:
-    - python -m pytest tests/ -v
+    - coverage run -m pytest tests/ -v
+    - coverage report --include="src/*" --fail-under=80
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == "main"
