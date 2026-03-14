@@ -205,6 +205,12 @@ def remember(
        - If no match → create a new entry
     3. If force=True → always create new (skip duplicate detection)
 
+    Best practice: prefer small, focused articles over large monolithic
+    ones. Each article should cover one complete, atomic piece of
+    knowledge. Use links to connect related articles rather than
+    cramming everything into a single entry. This keeps articles
+    self-sufficient, searchable, and easy to update independently.
+
     Content may contain links to other entries using the format
     [label](kb://uuid#type) where type is the relation kind (e.g.
     runs-on, depends-on, mirrors). These links are automatically
