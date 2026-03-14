@@ -49,6 +49,17 @@ def parse_args() -> argparse.Namespace:
         default="stdio",
         help="MCP transport protocol (default: stdio)",
     )
+    parser.add_argument(
+        "--host",
+        default="0.0.0.0",
+        help="Listen address for SSE/HTTP transport (default: 0.0.0.0)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Listen port for SSE/HTTP transport (default: 8000)",
+    )
 
     # Parsed arguments
     return parser.parse_args()
@@ -114,7 +125,7 @@ logger.info("Knowledge base ready")
 # MCP Server
 # ---------------------------------------------------------------------------
 
-mcp = FastMCP(name="MCP KB Server")
+mcp = FastMCP(name="MCP KB Server", host=args.host, port=args.port)
 
 # ---------------------------------------------------------------------------
 # Tools
