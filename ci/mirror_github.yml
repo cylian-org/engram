@@ -8,10 +8,15 @@ mirror:github:
   before_script:
     - apk add --no-cache git
   script:
-    - git clone --bare "${CI_REPOSITORY_URL}" repo.git
-    - cd repo.git
+    - git clone "${CI_REPOSITORY_URL}" repo
+    - cd repo
+    - git checkout "${CI_COMMIT_TAG}"
+    - rm -rf ci/ .gitlab-ci.yml
+    - git add -A
+    - git -c user.name="CI" -c user.email="ci@cylian.org" commit -m "Release ${CI_COMMIT_TAG}" --allow-empty
+    - git tag -f "${CI_COMMIT_TAG}"
     - git remote add github "https://x-access-token:${GITHUB_TOKEN}@github.com/cylian-org/engram.git"
-    - git push github "refs/tags/${CI_COMMIT_TAG}:refs/tags/${CI_COMMIT_TAG}"
-    - git push github "${CI_COMMIT_TAG}:refs/heads/main" --force
+    - git push github HEAD:refs/heads/main --force
+    - git push github "refs/tags/${CI_COMMIT_TAG}:refs/tags/${CI_COMMIT_TAG}" --force
   rules:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
