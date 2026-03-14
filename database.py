@@ -304,47 +304,87 @@ class KnowledgeBase:
     # CRUD operations (file + index)
     # -----------------------------------------------------------------------
 
-    def store(
+    def remember(
         self,
         title: str,
         content: str,
         tags: list[str],
+        entry_id: str | None = None,
         force: bool = False,
     ) -> dict[str, Any]:
         """
-        Create a new entry. Blocks if a duplicate title is detected.
+        Upsert an entry: update if it exists, create if it doesn't.
+
+        Resolution order:
+        1. If entry_id is provided → update that entry
+        2. If no entry_id → search for similar titles
+           - If a match is found above threshold → update the best match
+           - If no match → create a new entry
+        3. If force=True → always create new (skip duplicate detection)
 
         Args:
             title: Entry title.
             content: Entry body (Markdown).
             tags: List of tags.
-            force: If True, skip duplicate check.
+            entry_id: Optional UUID of an existing entry to update.
+            force: Skip duplicate detection and always create new.
 
         Returns:
-            Dict with 'id' on success, or 'error' and 'duplicates' on conflict.
+            Dict with id, title, and action ('created' or 'updated').
         """
 
         tags = _normalize_tags(tags)
 
-        # Check for duplicates unless forced
+        # Case 1: explicit ID → update
+        if entry_id:
+            existing = self.get(entry_id)
+            if not existing:
+                logger.warning("Remember failed — entry %s not found", entry_id)
+                # Not found
+                return {"error": f"Entry {entry_id} not found"}
+
+            existing["title"] = title
+            existing["content"] = content
+            existing["tags"] = tags
+
+            self._write_entry(existing)
+            self._index_entry(existing)
+
+            logger.info("Updated entry %s: %s", entry_id, title)
+            # Updated
+            return {"id": entry_id, "title": title, "action": "updated"}
+
+        # Case 2: no ID, check for duplicates (unless forced)
         if not force:
             similar = self.find_similar(title)
             if similar:
-                logger.info(
-                    "Duplicate detected for '%s': %d similar entries",
-                    title,
-                    len(similar),
-                )
-                # Duplicate blocked
-                return {
-                    "error": "duplicate_detected",
-                    "message": (
-                        f"Found {len(similar)} similar entry(ies). "
-                        "Use force=True to create anyway."
-                    ),
-                    "duplicates": similar,
-                }
+                # Update the best match
+                best = similar[0]
+                best_entry = self.get(best["id"])
+                if best_entry:
+                    best_entry["title"] = title
+                    best_entry["content"] = content
+                    best_entry["tags"] = tags
 
+                    self._write_entry(best_entry)
+                    self._index_entry(best_entry)
+
+                    logger.info(
+                        "Updated existing entry %s (similarity %d%%): %s",
+                        best["id"],
+                        best["score"],
+                        title,
+                    )
+                    # Updated via duplicate match
+                    return {
+                        "id": best["id"],
+                        "title": title,
+                        "action": "updated",
+                        "matched": best["title"],
+                        "similarity": best["score"],
+                    }
+
+        # Case 3: create new
         entry_id = str(uuid.uuid4())
         entry = {
             "id": entry_id,
@@ -356,9 +396,9 @@ class KnowledgeBase:
         self._write_entry(entry)
         self._index_entry(entry)
 
-        logger.info("Stored new entry %s: %s", entry_id, title)
+        logger.info("Created new entry %s: %s", entry_id, title)
         # Entry created
-        return {"id": entry_id, "title": title}
+        return {"id": entry_id, "title": title, "action": "created"}
 
     def get(self, entry_id: str) -> dict[str, Any] | None:
         """
@@ -378,46 +418,6 @@ class KnowledgeBase:
 
         # Read and return
         return self._read_entry(filepath)
-
-    def update(
-        self,
-        entry_id: str,
-        title: str | None = None,
-        content: str | None = None,
-        tags: list[str] | None = None,
-    ) -> bool:
-        """
-        Partially update an entry. Only provided fields are changed.
-
-        Args:
-            entry_id: UUID of the entry to update.
-            title: New title (optional).
-            content: New content (optional).
-            tags: New tags — full replacement if provided (optional).
-
-        Returns:
-            True if updated, False if entry not found.
-        """
-
-        existing = self.get(entry_id)
-        if not existing:
-            logger.warning("Update failed — entry %s not found", entry_id)
-            # Not found
-            return False
-
-        if title is not None:
-            existing["title"] = title
-        if content is not None:
-            existing["content"] = content
-        if tags is not None:
-            existing["tags"] = _normalize_tags(tags)
-
-        self._write_entry(existing)
-        self._index_entry(existing)
-
-        logger.info("Updated entry %s", entry_id)
-        # Updated
-        return True
 
     def delete(self, entry_id: str) -> bool:
         """

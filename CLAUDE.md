@@ -2,7 +2,7 @@
 
 ## Architecture
 
-- **server.py** : FastMCP server (stdio transport) — 8 MCP tools prefixed `kb_`
+- **server.py** : FastMCP server (stdio transport) — 7 MCP tools (remember, recall, search, list, tags, forget, rebuild)
 - **database.py** : Classe KnowledgeBase — fichiers Markdown + index Xapian
 - **Données** : `/opt/knowledge/entries/` (MD + frontmatter YAML)
 - **Index** : `/opt/knowledge/index/fr/` (Xapian, stemmer français)
@@ -55,7 +55,7 @@ Convention Markdown standard : `[Titre de l'article](kb://<uuid>)` dans le conte
 
 ### Cycle de vie
 
-- Maintenance au fil de l'eau : `kb_update` quand une info est revalidée
+- Maintenance au fil de l'eau : `remember` avec `entry_id` quand une info est revalidée
 - Pas d'expiration automatique
 
 ### Frontière avec MEMORY.md
