@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
@@ -189,6 +190,17 @@ def register_tools(
             # Not found
             return {"error": f"Entry {entry_id} not found"}
 
+        # Add size metadata (bytes)
+        entry["size"] = len(entry["content"].encode("utf-8"))
+
+        # Add last modified date from filesystem
+        entry_file = kb.entry_path(entry_id)
+        if entry_file and entry_file.exists():
+            mtime = entry_file.stat().st_mtime
+            entry["last_modified"] = datetime.fromtimestamp(
+                mtime, tz=timezone.utc
+            ).strftime("%Y-%m-%d")
+
         # Entry retrieved
         return entry
 
@@ -241,6 +253,25 @@ def register_tools(
         )
 
         result = kb.remember(title, content, tags, entry_id=entry_id, force=force)
+
+        # Add size metadata and warnings
+        if "error" not in result:
+            content_size = len(content.encode("utf-8"))
+            result["size"] = content_size
+
+            warnings = []
+            if content_size > 4096:
+                warnings.append(
+                    f"Article is {content_size / 1024:.1f} KB — exceeds 4 KB limit. "
+                    "Consider splitting into smaller articles."
+                )
+            elif content_size > 2048:
+                warnings.append(
+                    f"Article is {content_size / 1024:.1f} KB — exceeds 2 KB target."
+                )
+
+            if warnings:
+                result["warnings"] = warnings
 
         # Remember done
         return result
