@@ -153,7 +153,7 @@ def recall(entry_id: str) -> dict:
 
     logger.info("recall: id=%s", entry_id)
 
-    entry = kb.get(entry_id)
+    entry = kb.get(entry_id, with_relations=True)
     if not entry:
         # Not found
         return {"error": f"Entry {entry_id} not found"}
