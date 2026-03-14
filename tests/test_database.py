@@ -264,8 +264,12 @@ class TestSearch:
         """Search with tag filter only returns entries matching the tag."""
 
         _create_entry(kb, "Docker Networking", "Bridge mode.", ["docker"], force=True)
-        _create_entry(kb, "Docker Volumes", "Bind mounts.", ["docker", "storage"], force=True)
-        _create_entry(kb, "Ansible Networking", "Network modules.", ["ansible"], force=True)
+        _create_entry(
+            kb, "Docker Volumes", "Bind mounts.", ["docker", "storage"], force=True
+        )
+        _create_entry(
+            kb, "Ansible Networking", "Network modules.", ["ansible"], force=True
+        )
 
         # Search "networking" but only in "docker" tag
         results = kb.search("networking", tags=["docker"])
@@ -366,7 +370,9 @@ class TestRelations:
     def test_extract_relations_none(self) -> None:
         """Content without any kb:// links returns an empty list."""
 
-        content = "No knowledge base links here. Just a [regular link](https://example.com)."
+        content = (
+            "No knowledge base links here. Just a [regular link](https://example.com)."
+        )
 
         relations = KnowledgeBase._extract_relations(content)
 
@@ -439,7 +445,9 @@ class TestRelations:
         # Incoming on target
         target_rels = kb.get_relations(target_id)
         in_rel = target_rels["in"]
-        assert any(r["type"] == "supersedes" and r["id"] == source["id"] for r in in_rel)
+        assert any(
+            r["type"] == "supersedes" and r["id"] == source["id"] for r in in_rel
+        )
 
 
 # ===========================================================================

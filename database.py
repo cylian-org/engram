@@ -453,9 +453,7 @@ class KnowledgeBase:
         # Entry created
         return {"id": entry_id, "title": title, "action": "created"}
 
-    def get(
-        self, entry_id: str, with_relations: bool = False
-    ) -> dict[str, Any] | None:
+    def get(self, entry_id: str, with_relations: bool = False) -> dict[str, Any] | None:
         """
         Read the full content of an entry.
 
