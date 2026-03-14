@@ -43,6 +43,12 @@ def parse_args() -> argparse.Namespace:
         default="/var/log/mcp-kb.log",
         help="Path to the log file (default: /var/log/mcp-kb.log)",
     )
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "sse", "streamable-http"],
+        default="stdio",
+        help="MCP transport protocol (default: stdio)",
+    )
 
     # Parsed arguments
     return parser.parse_args()
@@ -304,5 +310,5 @@ def rebuild() -> dict:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    logger.info("Starting MCP KB Server (stdio transport)")
-    mcp.run(transport="stdio")
+    logger.info("Starting MCP KB Server (%s transport)", args.transport)
+    mcp.run(transport=args.transport)
