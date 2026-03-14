@@ -1,19 +1,19 @@
 """
-Search backends for Engram.
+Xapian search backend for Engram.
 
-Defines the SearchBackend interface and concrete implementations.
-Source of truth remains the Markdown files — backends are rebuildable caches.
+Full-text search with French stemming, graph relation indexing,
+and tag filtering. The index is a rebuildable cache on disk.
 """
 
 from __future__ import annotations
 
 import logging
-import re
-from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
 import xapian
+
+from backend import SearchBackend, extract_relations
 
 logger = logging.getLogger("engram")
 
@@ -26,135 +26,6 @@ PREFIX_TITLE: str = "XTITLE"
 PREFIX_TAG: str = "XTAG"
 PREFIX_RELOUT: str = "XRELOUT:"
 PREFIX_RELTGT: str = "XRELTGT:"
-
-# Regex for extracting kb:// links with optional #type fragment
-RE_KB_LINK: re.Pattern[str] = re.compile(
-    r"\[[^\]]*\]\(kb://([a-f0-9-]+)(?:#([a-zA-Z0-9_-]+))?\)"
-)
-
-
-# ---------------------------------------------------------------------------
-# Abstract base class
-# ---------------------------------------------------------------------------
-
-
-class SearchBackend(ABC):
-    """
-    Abstract search backend interface.
-
-    All backends must implement indexing, unindexing, searching, and
-    rebuilding. The backend is a cache — Markdown files are the source
-    of truth.
-    """
-
-    @abstractmethod
-    def index(self, entry: dict[str, Any]) -> None:
-        """
-        Index or update an entry. Must handle upsert.
-
-        Args:
-            entry: Dict with id, title, tags, content.
-        """
-        ...
-
-    @abstractmethod
-    def unindex(self, entry_id: str) -> None:
-        """
-        Remove an entry from the index.
-
-        Args:
-            entry_id: UUID of the entry.
-        """
-        ...
-
-    @abstractmethod
-    def search(
-        self, query: str, tags: list[str] | None, limit: int
-    ) -> list[dict[str, Any]]:
-        """
-        Full-text search. Returns list of dicts with id, score.
-
-        Does NOT return content — caller reads from file.
-
-        Args:
-            query: Search query string.
-            tags: Optional tag filter (AND logic).
-            limit: Maximum number of results.
-
-        Returns:
-            List of dicts with id and score keys.
-        """
-        ...
-
-    @abstractmethod
-    def rebuild(self, entries: list[dict[str, Any]]) -> int:
-        """
-        Rebuild index from a list of entries.
-
-        Args:
-            entries: List of dicts with id, title, tags, content.
-
-        Returns:
-            Number of entries indexed.
-        """
-        ...
-
-    @abstractmethod
-    def get_relations(self, entry_id: str) -> dict[str, list[dict[str, str]]]:
-        """
-        Get outgoing and incoming graph relations for an entry.
-
-        Args:
-            entry_id: UUID of the entry.
-
-        Returns:
-            Dict with 'out' and 'in' lists. Each item has 'type' and 'id'
-            keys — the caller resolves titles.
-        """
-        ...
-
-
-# ---------------------------------------------------------------------------
-# Relation extraction (shared utility)
-# ---------------------------------------------------------------------------
-
-
-def extract_relations(content: str) -> list[dict[str, str]]:
-    """
-    Extract kb:// link relations from Markdown content.
-
-    Parses links of the form [label](kb://uuid) or [label](kb://uuid#type).
-    When no #type fragment is present, defaults to "related".
-
-    Args:
-        content: Markdown content body.
-
-    Returns:
-        List of dicts with 'target' (UUID) and 'type' (relation type).
-    """
-
-    relations: list[dict[str, str]] = []
-    seen: set[tuple[str, str]] = set()
-
-    for match in RE_KB_LINK.finditer(content):
-        target_id = match.group(1)
-        rel_type = match.group(2) or "related"
-
-        # Deduplicate identical target+type pairs
-        key = (target_id, rel_type)
-        if key in seen:
-            continue
-        seen.add(key)
-
-        relations.append({"target": target_id, "type": rel_type})
-
-    # Extracted
-    return relations
-
-
-# ---------------------------------------------------------------------------
-# Xapian backend
-# ---------------------------------------------------------------------------
 
 
 class XapianBackend(SearchBackend):
@@ -221,10 +92,6 @@ class XapianBackend(SearchBackend):
         """
         Index or update an entry in a pre-opened Xapian database.
 
-        Builds a Xapian document with title, tags, content, and relation
-        terms, then upserts it via replace_document with Q<uuid> as the
-        unique ID term.
-
         Does NOT commit or close the database — the caller is responsible.
 
         Args:
@@ -243,13 +110,11 @@ class XapianBackend(SearchBackend):
 
         # Index title with higher weight (wdf_inc=5)
         tg.index_text(entry["title"], 5, PREFIX_TITLE)
-        # Also index title without prefix for general search
         tg.index_text(entry["title"], 5)
 
         # Index tags
         for tag in entry["tags"]:
             doc.add_boolean_term(f"{PREFIX_TAG}{tag}")
-            # Also index tag text for general search
             tg.index_text(tag, 1)
 
         # Index content
@@ -259,9 +124,7 @@ class XapianBackend(SearchBackend):
         # Index outgoing relations from kb:// links in content
         relations = extract_relations(entry["content"])
         for rel in relations:
-            # Outgoing relation term: allows reading this entry's outgoing links
             doc.add_boolean_term(f"{PREFIX_RELOUT}{rel['type']}:{rel['target']}")
-            # Target marker term: allows finding all entries that link TO a target
             doc.add_boolean_term(f"{PREFIX_RELTGT}{rel['target']}")
 
         # Store data for retrieval (entry id)
@@ -282,17 +145,12 @@ class XapianBackend(SearchBackend):
         """
         Index or update a single entry in Xapian.
 
-        Opens a WritableDatabase, indexes the entry, commits, and closes.
-        For bulk operations, use rebuild() instead.
-
         Args:
             entry: Dict with id, title, tags, content.
         """
 
         db = self._get_writable_db()
         self._index_entry_with_db(entry, db)
-
-        # Explicit commit to ensure changes are visible to subsequent reads
         db.commit()
         db.close()
 
@@ -307,7 +165,6 @@ class XapianBackend(SearchBackend):
         db = self._get_writable_db()
         id_term = f"{PREFIX_ID}{entry_id}"
         db.delete_document(id_term)
-        # Explicit commit to ensure changes are visible to subsequent reads
         db.commit()
         db.close()
         logger.info("Unindexed entry %s", entry_id)
@@ -317,9 +174,6 @@ class XapianBackend(SearchBackend):
     ) -> list[dict[str, Any]]:
         """
         Full-text search with optional tag filtering.
-
-        Returns lightweight results (id, score) — the caller enriches
-        with title, tags, and snippets from the Markdown files.
 
         Args:
             query_str: Search query string.
@@ -372,9 +226,6 @@ class XapianBackend(SearchBackend):
         """
         Rebuild index from a list of entries.
 
-        Opens a single WritableDatabase with DB_CREATE_OR_OVERWRITE (which
-        wipes the existing index) and indexes every entry in one pass.
-
         Args:
             entries: List of dicts with id, title, tags, content.
 
@@ -384,7 +235,6 @@ class XapianBackend(SearchBackend):
 
         logger.info("Rebuilding Xapian index (%d entries)", len(entries))
 
-        # Open once with OVERWRITE to wipe existing index
         db = xapian.WritableDatabase(
             str(self._index_path), xapian.DB_CREATE_OR_OVERWRITE
         )
@@ -394,7 +244,6 @@ class XapianBackend(SearchBackend):
             self._index_entry_with_db(entry, db)
             count += 1
 
-        # Single commit for all entries
         db.commit()
         db.close()
 
@@ -406,18 +255,11 @@ class XapianBackend(SearchBackend):
         """
         Get outgoing and incoming graph relations for an entry.
 
-        Outgoing relations are read from the entry's Xapian document terms
-        (XRELOUT:{type}:{target_id}). Incoming relations (backlinks) are
-        found by searching for documents that have XRELTGT:{entry_id}
-        terms, then reading their XRELOUT terms to extract the relation
-        type.
-
         Args:
             entry_id: UUID of the entry.
 
         Returns:
-            Dict with 'out' list (outgoing) and 'in' list (incoming).
-            Each item has 'type' and 'id' keys — no title (caller resolves).
+            Dict with 'out' and 'in' lists. Each item has 'type' and 'id'.
         """
 
         out: list[dict[str, str]] = []
@@ -431,47 +273,38 @@ class XapianBackend(SearchBackend):
             return {"out": out, "in": incoming}
 
         # --- Outgoing relations ---
-        # Find the document for this entry by its Q-term
         id_term = f"{PREFIX_ID}{entry_id}"
         postlist = db.postlist(id_term)
         try:
             posting = next(postlist)
             doc = db.get_document(posting.docid)
 
-            # Read all XRELOUT: terms from this document
             for term_item in doc:
                 term = term_item.term.decode("utf-8")
                 if term.startswith(PREFIX_RELOUT):
-                    # Parse "XRELOUT:{type}:{target_id}"
                     remainder = term[len(PREFIX_RELOUT) :]
                     colon_pos = remainder.find(":")
                     if colon_pos == -1:
                         continue
                     rel_type = remainder[:colon_pos]
                     target_id = remainder[colon_pos + 1 :]
-
                     out.append({"type": rel_type, "id": target_id})
         except StopIteration:
-            # Entry not in index — no outgoing relations
             pass
 
         # --- Incoming relations (backlinks) ---
-        # Find all documents that have XRELTGT:{entry_id} term
         tgt_term = f"{PREFIX_RELTGT}{entry_id}"
         for posting in db.postlist(tgt_term):
             source_doc = db.get_document(posting.docid)
             source_id = source_doc.get_data().decode("utf-8")
 
-            # Skip self-references
             if source_id == entry_id:
                 continue
 
-            # Find the relation type(s) from this source pointing to entry_id
             for term_item in source_doc:
                 term = term_item.term.decode("utf-8")
                 if not term.startswith(PREFIX_RELOUT):
                     continue
-                # Parse "XRELOUT:{type}:{target_id}"
                 remainder = term[len(PREFIX_RELOUT) :]
                 colon_pos = remainder.find(":")
                 if colon_pos == -1:
@@ -479,7 +312,6 @@ class XapianBackend(SearchBackend):
                 rel_type = remainder[:colon_pos]
                 target_id = remainder[colon_pos + 1 :]
 
-                # Only include if this relation points to our entry
                 if target_id != entry_id:
                     continue
 

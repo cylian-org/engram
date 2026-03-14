@@ -19,7 +19,7 @@ from typing import Any
 
 import yaml
 
-from backends import SearchBackend, extract_relations
+from backend import SearchBackend, extract_relations
 
 logger = logging.getLogger("engram")
 
@@ -89,7 +89,7 @@ class KnowledgeBase:
 
         # Initialize search backend (default: Xapian for backward compat)
         if backend is None:
-            from backends import XapianBackend
+            from backend.xapian import XapianBackend
 
             backend = XapianBackend(self._index_path)
         self._backend = backend

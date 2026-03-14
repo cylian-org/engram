@@ -17,7 +17,7 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
-from backends import XapianBackend
+from backend.xapian import XapianBackend
 from database import KnowledgeBase
 
 # ---------------------------------------------------------------------------
