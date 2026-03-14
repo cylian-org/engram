@@ -11,8 +11,7 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) server that gives A
 Your agent manages the server. Recommended for Claude Code, ChatGPT Desktop, Cursor.
 
 ```bash
-claude mcp add --transport stdio engram -- \
-  docker run -i --rm -v ./knowledge:/knowledge cylian/engram
+claude mcp add --transport stdio engram -- docker run -i --rm -v ./knowledge:/knowledge cylian/engram
 ```
 
 ### SSE
@@ -25,8 +24,7 @@ docker run -d --name engram \
   -v ./knowledge:/knowledge \
   cylian/engram --transport sse
 
-claude mcp add --transport sse \
-  engram http://your-host:8192/sse
+claude mcp add --transport sse engram http://your-host:8192/sse
 ```
 
 ### HTTP
@@ -39,8 +37,7 @@ docker run -d --name engram \
   -v ./knowledge:/knowledge \
   cylian/engram --transport streamable-http
 
-claude mcp add --transport http \
-  engram http://your-host:8192/mcp
+claude mcp add --transport http engram http://your-host:8192/mcp
 ```
 
 ## Search Backends
@@ -123,15 +120,14 @@ The search index is a rebuildable cache in `<data-path>/index/<backend>/`. Delet
 ## Development
 
 ```bash
-# Install
-python3 -m venv .venv --system-site-packages
-.venv/bin/pip install -r src/requirements.txt
+# Build
+docker build -t engram .
 
 # Test (89 tests, 90% coverage)
-.venv/bin/python -m pytest tests/ -v
+docker run --rm engram python -m pytest tests/ -v
 
-# Lint
-.venv/bin/python -m ruff check src/ tests/
+# Run locally (SSE)
+docker run -d --name engram -p 8192:8192 -v ./knowledge:/knowledge engram --transport sse
 ```
 
 ## License
