@@ -1,5 +1,5 @@
 """
-MCP KB Server — persistent knowledge base with full-text search.
+Engram — persistent knowledge base MCP server with full-text search.
 
 Provides MCP tools for storing, searching, and managing knowledge entries.
 Entries are Markdown files with YAML frontmatter, indexed by Xapian with
@@ -7,7 +7,6 @@ French stemming for full-text search.
 
 Transport: stdio (stdin/stdout for MCP protocol, managed by Claude Code).
 Data: Markdown files in --data-path/entries/, Xapian index in --data-path/index/fr/.
-Logging: All operations logged to /var/log/mcp-kb.log.
 """
 
 from __future__ import annotations
@@ -32,7 +31,7 @@ def parse_args() -> argparse.Namespace:
         Parsed arguments namespace with data-path and log-file.
     """
 
-    parser = argparse.ArgumentParser(description="MCP KB Server (stdio)")
+    parser = argparse.ArgumentParser(description="Engram (stdio)")
     parser.add_argument(
         "--data-path",
         default="/knowledge",
@@ -89,7 +88,7 @@ def setup_logging(log_file: str) -> logging.Logger:
         Raises if the log file cannot be opened (no fallback in stdio mode).
     """
 
-    log = logging.getLogger("mcp-kb")
+    log = logging.getLogger("engram")
     log.setLevel(logging.INFO)
 
     formatter = logging.Formatter(
@@ -125,7 +124,7 @@ logger.info("Knowledge base ready")
 # MCP Server
 # ---------------------------------------------------------------------------
 
-mcp = FastMCP(name="MCP KB Server", host=args.host, port=args.port)
+mcp = FastMCP(name="Engram", host=args.host, port=args.port)
 
 # ---------------------------------------------------------------------------
 # Tools
@@ -326,5 +325,5 @@ def rebuild() -> dict:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    logger.info("Starting MCP KB Server (%s transport)", args.transport)
+    logger.info("Starting Engram (%s transport)", args.transport)
     mcp.run(transport=args.transport)

@@ -1,5 +1,5 @@
-# GitLab CI/CD Pipeline for mcp-kb
-# Python MCP server — knowledge base with Xapian search
+# GitLab CI/CD Pipeline for Engram
+# Knowledge base MCP server with Xapian search
 
 stages:
   - analyse

@@ -1,4 +1,4 @@
-# MCP KB — Knowledge Base MCP Server
+# Engram — Knowledge Base MCP Server
 
 ## Architecture
 
@@ -6,7 +6,7 @@
 - **database.py** : Classe KnowledgeBase — fichiers Markdown + index Xapian
 - **Données** : `/opt/knowledge/entries/` (MD + frontmatter YAML)
 - **Index** : `/opt/knowledge/index/fr/` (Xapian, stemmer français)
-- **Log** : `/var/log/mcp-kb.log`
+- **Log** : stderr (par défaut) ou `--log-file <path>`
 
 ## Conventions
 
