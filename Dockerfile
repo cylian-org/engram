@@ -10,8 +10,7 @@ COPY src/requirements.txt .
 RUN pip install --no-cache-dir xapian-bindings-binary -r requirements.txt
 
 # Copy application
-COPY src/server.py src/database.py ./
-COPY src/backend/ ./backend/
+COPY src/ ./
 
 # Non-root user
 RUN addgroup -S engram && adduser -S engram -G engram

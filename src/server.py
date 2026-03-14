@@ -13,54 +13,72 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
-from backend.xapian import XapianBackend
 from database import KnowledgeBase
 
 # ---------------------------------------------------------------------------
-# CLI arguments
+# CLI arguments (all have ENGRAM_* env var fallbacks, args take priority)
 # ---------------------------------------------------------------------------
+
+
+def _env(name: str, default: str | None = None) -> str | None:
+    """Read an ENGRAM_* environment variable with a default."""
+    # Environment variable fallback
+    return os.environ.get(f"ENGRAM_{name}", default)
 
 
 def parse_args() -> argparse.Namespace:
     """
     Parse command-line arguments.
 
+    Every argument has an ENGRAM_* environment variable fallback.
+    CLI arguments take priority over env vars.
+
     Returns:
-        Parsed arguments namespace with data-path, log-file, transport,
-        host, and port.
+        Parsed arguments namespace.
     """
 
-    parser = argparse.ArgumentParser(description="Engram (stdio)")
+    parser = argparse.ArgumentParser(description="Engram MCP Server")
     parser.add_argument(
         "--data-path",
-        default="/knowledge",
-        help="Root path for knowledge data (default: /knowledge)",
+        default=_env("DATA_PATH", "/knowledge"),
+        help="Root path for knowledge data (env: ENGRAM_DATA_PATH, default: /knowledge)",
     )
     parser.add_argument(
         "--log-file",
-        default=None,
-        help="Path to the log file (default: stderr)",
+        default=_env("LOG_FILE"),
+        help="Path to the log file (env: ENGRAM_LOG_FILE, default: stderr)",
     )
     parser.add_argument(
         "--transport",
         choices=["stdio", "sse", "streamable-http"],
-        default="stdio",
-        help="MCP transport protocol (default: stdio)",
+        default=_env("TRANSPORT", "stdio"),
+        help="MCP transport (env: ENGRAM_TRANSPORT, default: stdio)",
     )
     parser.add_argument(
         "--host",
-        default="0.0.0.0",
-        help="Listen address for SSE/HTTP transport (default: 0.0.0.0)",
+        default=_env("HOST", "0.0.0.0"),
+        help="Listen address (env: ENGRAM_HOST, default: 0.0.0.0)",
     )
     parser.add_argument(
         "--port",
         type=int,
-        default=8192,
-        help="Listen port for SSE/HTTP transport (default: 8192)",
+        default=int(_env("PORT", "8192")),
+        help="Listen port (env: ENGRAM_PORT, default: 8192)",
+    )
+    parser.add_argument(
+        "--backend",
+        default=_env("BACKEND", "xapian"),
+        help="Search backend: xapian, sqlite, whoosh (env: ENGRAM_BACKEND, default: xapian)",
+    )
+    parser.add_argument(
+        "--language",
+        default=_env("LANGUAGE", "en"),
+        help="Stemmer language (env: ENGRAM_LANGUAGE, default: en)",
     )
 
     # Parsed arguments
@@ -329,6 +347,74 @@ def register_tools(
 
 
 # ---------------------------------------------------------------------------
+# Backend factory
+# ---------------------------------------------------------------------------
+
+
+def _create_backend(name: str, index_base: Path, language: str):
+    """
+    Create a search backend by name (dynamic import).
+
+    Loads backend.{name}.main and looks for a Backend class that
+    inherits from SearchBackend. Any directory in backend/ with a
+    main.py exporting a Backend class is a valid backend.
+
+    Args:
+        name: Backend name (directory name under backend/).
+        index_base: Base path for index storage.
+        language: Stemmer language code.
+
+    Returns:
+        A SearchBackend instance.
+
+    Errors:
+        Raises SystemExit if the backend is unknown or unavailable.
+    """
+
+    import importlib
+
+    index_path = index_base / name
+
+    try:
+        module = importlib.import_module(f"backend.{name}.main")
+    except ModuleNotFoundError:
+        # List available backends
+        available = [
+            d.name
+            for d in (Path(__file__).parent / "backend").iterdir()
+            if d.is_dir() and (d / "main.py").exists()
+        ]
+        print(f"Unknown backend: {name}. Available: {', '.join(sorted(available))}")
+        raise SystemExit(1)
+
+    # Find the Backend class (first SearchBackend subclass in the module)
+    from backend import SearchBackend
+
+    backend_cls = None
+    for attr_name in dir(module):
+        attr = getattr(module, attr_name)
+        if (
+            isinstance(attr, type)
+            and issubclass(attr, SearchBackend)
+            and attr is not SearchBackend
+        ):
+            backend_cls = attr
+            break
+
+    if backend_cls is None:
+        print(f"Backend {name} has no SearchBackend subclass in main.py")
+        raise SystemExit(1)
+
+    # Instantiate with index_path + language (backends accept **kwargs for flexibility)
+    try:
+        # Backend created
+        return backend_cls(index_path, language=language)
+    except TypeError:
+        # Fallback: backend doesn't accept language
+        return backend_cls(index_path)
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -345,9 +431,13 @@ def main() -> None:
     logger = setup_logging(args.log_file)
 
     logger.info("Initializing knowledge base from %s", args.data_path)
-    backend = XapianBackend(Path(args.data_path) / "index" / "fr")
+    backend = _create_backend(
+        args.backend, Path(args.data_path) / "index", args.language
+    )
     kb = KnowledgeBase(args.data_path, backend=backend)
-    logger.info("Knowledge base ready")
+    logger.info(
+        "Knowledge base ready (backend=%s, language=%s)", args.backend, args.language
+    )
 
     mcp = FastMCP(name="Engram", host=args.host, port=args.port)
 

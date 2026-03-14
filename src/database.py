@@ -89,7 +89,7 @@ class KnowledgeBase:
 
         # Initialize search backend (default: Xapian for backward compat)
         if backend is None:
-            from backend.xapian import XapianBackend
+            from backend.xapian.main import XapianBackend
 
             backend = XapianBackend(self._index_path)
         self._backend = backend

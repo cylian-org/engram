@@ -30,21 +30,23 @@ PREFIX_RELTGT: str = "XRELTGT:"
 
 class XapianBackend(SearchBackend):
     """
-    Xapian-based search backend with French stemming.
+    Xapian-based search backend with configurable stemming.
 
     Stores a full-text index on disk. The index is a cache — Markdown
     files are the source of truth and can be rebuilt at any time.
 
     Args:
         index_path: Path to the Xapian index directory.
+        language: Stemmer language (default: "en"). Uses Xapian's Stem class.
     """
 
-    def __init__(self, index_path: str | Path) -> None:
+    def __init__(self, index_path: str | Path, language: str = "en") -> None:
         """
         Initialize the Xapian backend.
 
         Args:
             index_path: Path to the Xapian index directory.
+            language: Stemmer language code (e.g. "en", "fr", "de").
 
         Errors:
             Creates the directory if missing.
@@ -52,6 +54,7 @@ class XapianBackend(SearchBackend):
 
         self._index_path = Path(index_path)
         self._index_path.mkdir(parents=True, exist_ok=True)
+        self._language = language
 
     # -------------------------------------------------------------------
     # Internal database access
@@ -103,7 +106,7 @@ class XapianBackend(SearchBackend):
 
         # Term generator with French stemmer
         tg = xapian.TermGenerator()
-        tg.set_stemmer(xapian.Stem("fr"))
+        tg.set_stemmer(xapian.Stem(self._language))
         tg.set_database(db)
         tg.set_flags(tg.FLAG_SPELLING)
         tg.set_document(doc)
@@ -193,7 +196,7 @@ class XapianBackend(SearchBackend):
 
         # Query parser with French stemmer
         qp = xapian.QueryParser()
-        qp.set_stemmer(xapian.Stem("fr"))
+        qp.set_stemmer(xapian.Stem(self._language))
         qp.set_stemming_strategy(qp.STEM_SOME)
         qp.set_database(db)
 
