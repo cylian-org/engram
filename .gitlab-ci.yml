@@ -4,6 +4,7 @@
 stages:
   - analyse
   - test
+  - package
   - release
 
 # Variables globales
@@ -14,4 +15,5 @@ variables:
 include:
   - local: 'ci/analyse_lint.yml'
   - local: 'ci/test_pytest.yml'
+  - local: 'ci/package_docker.yml'
   - local: 'ci/release_tag.yml'
