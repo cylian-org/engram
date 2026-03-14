@@ -47,6 +47,29 @@ RE_KB_LINK: re.Pattern[str] = re.compile(
     r"\[[^\]]*\]\(kb://([a-f0-9-]+)(?:#([a-zA-Z0-9_-]+))?\)"
 )
 
+# Regex for validating UUID format (path traversal prevention)
+_UUID_RE: re.Pattern[str] = re.compile(
+    r"^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$"
+)
+
+
+def _validate_entry_id(entry_id: str) -> bool:
+    """
+    Validate that an entry_id is a well-formed UUID.
+
+    Prevents path traversal attacks by rejecting any value that is not
+    a strict lowercase UUID (8-4-4-4-12 hex characters).
+
+    Args:
+        entry_id: The entry identifier to validate.
+
+    Returns:
+        True if valid UUID format, False otherwise.
+    """
+
+    # Validated
+    return bool(_UUID_RE.match(entry_id))
+
 
 class KnowledgeBase:
     """
@@ -319,6 +342,8 @@ class KnowledgeBase:
         db = self._get_writable_db()
         id_term = f"{PREFIX_ID}{entry_id}"
         db.delete_document(id_term)
+        # Explicit commit to ensure changes are visible to subsequent reads
+        db.commit()
         db.close()
         logger.info("Unindexed entry %s", entry_id)
 
@@ -390,6 +415,11 @@ class KnowledgeBase:
 
         # Case 1: explicit ID → update
         if entry_id:
+            if not _validate_entry_id(entry_id):
+                logger.warning("Invalid entry_id rejected: %s", entry_id)
+                # Invalid ID format
+                return {"error": f"Invalid entry_id: {entry_id}"}
+
             existing = self.get(entry_id)
             if not existing:
                 logger.warning("Remember failed — entry %s not found", entry_id)
@@ -466,6 +496,11 @@ class KnowledgeBase:
             a 'relations' key with 'out' and 'in' lists.
         """
 
+        if not _validate_entry_id(entry_id):
+            logger.warning("Invalid entry_id rejected: %s", entry_id)
+            # Invalid ID format
+            return None
+
         filepath = self._entries_path / f"{entry_id}.md"
         if not filepath.exists():
             # Not found
@@ -499,6 +534,11 @@ class KnowledgeBase:
             Dict with 'out' list (outgoing) and 'in' list (incoming/backlinks).
             Each item has 'type', 'id', and 'title' keys.
         """
+
+        if not _validate_entry_id(entry_id):
+            logger.warning("Invalid entry_id rejected: %s", entry_id)
+            # Invalid ID format
+            return {"out": [], "in": []}
 
         out: list[dict[str, str]] = []
         incoming: list[dict[str, str]] = []
@@ -586,6 +626,11 @@ class KnowledgeBase:
             Entry title, or "(unknown)" if the file cannot be read.
         """
 
+        if not _validate_entry_id(entry_id):
+            logger.warning("Invalid entry_id rejected: %s", entry_id)
+            # Invalid ID format
+            return "(unknown)"
+
         filepath = self._entries_path / f"{entry_id}.md"
         if not filepath.exists():
             # Missing file
@@ -609,6 +654,11 @@ class KnowledgeBase:
         Returns:
             True if deleted, False if not found.
         """
+
+        if not _validate_entry_id(entry_id):
+            logger.warning("Invalid entry_id rejected: %s", entry_id)
+            # Invalid ID format
+            return False
 
         filepath = self._entries_path / f"{entry_id}.md"
         if not filepath.exists():

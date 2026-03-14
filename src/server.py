@@ -152,6 +152,9 @@ def search(
         Dict with results list (id, title, tags, snippet, score).
     """
 
+    # Clamp limit to valid range
+    limit = max(1, min(limit, 100))
+
     logger.info("search: query='%s', tags=%s, limit=%d", query, tags, limit)
 
     results = kb.search(query, tags=tags, limit=limit)
@@ -264,8 +267,8 @@ def forget(entry_id: str) -> dict:
     return {"success": True, "id": entry_id}
 
 
-@mcp.tool()
-def list(
+@mcp.tool(name="list")
+def list_entries(
     tags: list[str] | None = None,
     limit: int = 50,
 ) -> dict:
@@ -279,6 +282,9 @@ def list(
     Returns:
         Dict with entries list (id, title, tags).
     """
+
+    # Clamp limit to valid range
+    limit = max(1, min(limit, 500))
 
     logger.info("list: tags=%s, limit=%d", tags, limit)
 
