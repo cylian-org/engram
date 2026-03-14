@@ -20,7 +20,7 @@ from typing import Any
 import xapian
 import yaml
 
-logger = logging.getLogger("mcp-kb")
+logger = logging.getLogger("engram")
 
 # ---------------------------------------------------------------------------
 # Xapian prefix constants
