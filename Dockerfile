@@ -13,15 +13,9 @@ RUN pip install --no-cache-dir xapian-bindings-binary -r requirements.txt
 COPY server.py database.py ./
 
 # Data volume
-VOLUME /data
-
-# Log to stderr in container mode (no file)
-ENV LOG_FILE=/dev/stderr
-
-# Default transport
-ENV TRANSPORT=stdio
+VOLUME /knowledge
 
 EXPOSE 8080
 
-ENTRYPOINT ["python", "server.py", "--data-path", "/data"]
+ENTRYPOINT ["python", "server.py", "--data-path", "/knowledge"]
 CMD []

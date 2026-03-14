@@ -40,8 +40,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--log-file",
-        default="/var/log/mcp-kb.log",
-        help="Path to the log file (default: /var/log/mcp-kb.log)",
+        default=None,
+        help="Path to the log file (default: stderr)",
     )
     parser.add_argument(
         "--transport",
@@ -86,10 +86,15 @@ def setup_logging(log_file: str) -> logging.Logger:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    # File handler (only — stderr is captured by Claude Code in stdio mode)
-    file_handler = logging.FileHandler(log_file, encoding="utf-8")
-    file_handler.setFormatter(formatter)
-    log.addHandler(file_handler)
+    if log_file:
+        # File handler (explicit path)
+        handler = logging.FileHandler(log_file, encoding="utf-8")
+    else:
+        # Stderr handler (default)
+        handler = logging.StreamHandler()
+
+    handler.setFormatter(formatter)
+    log.addHandler(handler)
 
     # Logger configured
     return log
