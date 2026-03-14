@@ -32,9 +32,6 @@ PREFIX_TAG: str = "XTAG"
 PREFIX_RELOUT: str = "XRELOUT:"
 PREFIX_RELTGT: str = "XRELTGT:"
 
-# Weighting slots
-SLOT_TITLE: int = 0
-
 # Default search limit
 DEFAULT_SEARCH_LIMIT: int = 10
 DEFAULT_LIST_LIMIT: int = 50

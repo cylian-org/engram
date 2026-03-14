@@ -3,7 +3,7 @@
 
 lint:ruff:
   stage: analyse
-  image: python:3.11-slim
+  image: python:3.13-slim
   before_script:
     - pip install --quiet ruff
   script:

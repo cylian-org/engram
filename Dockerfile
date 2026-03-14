@@ -12,6 +12,11 @@ RUN pip install --no-cache-dir xapian-bindings-binary -r requirements.txt
 # Copy application
 COPY src/server.py src/database.py ./
 
+# Non-root user
+RUN addgroup -S engram && adduser -S engram -G engram
+RUN mkdir -p /knowledge && chown engram:engram /knowledge
+USER engram
+
 # Data volume
 VOLUME /knowledge
 
