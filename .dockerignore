@@ -8,4 +8,4 @@ tests/
 ci/
 docs/
 *.md
-!requirements.txt
+!src/requirements.txt
