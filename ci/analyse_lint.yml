@@ -3,9 +3,9 @@
 
 lint:ruff:
   stage: analyse
-  image: python:3.11-slim
+  image: python:3.13-slim
   before_script:
-    - pip install --quiet ruff
+    - pip install --quiet ruff==0.11.12
   script:
     - ruff check .
     - ruff format --check .

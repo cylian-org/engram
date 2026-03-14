@@ -1,2 +1,4 @@
-mcp>=1.20.0
-pyyaml>=6.0
+mcp==1.26.0
+pyyaml==6.0.2
+xapian-bindings-binary==1.4.26
+whoosh==2.7.4
