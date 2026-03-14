@@ -1,97 +1,111 @@
-# Engram -- Persistent Knowledge Base MCP Server
+# Engram — Persistent Knowledge Base MCP Server
 
-A [Model Context Protocol](https://modelcontextprotocol.io/) server for persistent knowledge management with Xapian full-text search and graph relations.
+A [Model Context Protocol](https://modelcontextprotocol.io/) server that gives AI agents persistent memory. Markdown files as source of truth, pluggable search backends, typed graph relations.
 
-## Features
-
-- **Markdown files as source of truth** -- the Xapian index is a rebuildable cache
-- **Full-text search** with French stemming (Xapian)
-- **7 tools**: remember (upsert), recall, search, list, tags, forget, rebuild
-- **Graph relations** via `kb://uuid#type` links in content
-- **Duplicate detection** based on title similarity
-- **Three transports**: stdio, SSE, streamable-http
-- **Docker-ready** (Alpine image)
+**Website:** [engram-kb.org](https://engram-kb.org) · **Docker Hub:** [cylian/engram](https://hub.docker.com/r/cylian/engram)
 
 ## Quick Start
 
 ```bash
-# stdio (Claude Code, ChatGPT, etc.)
-docker run -i -v ./knowledge:/knowledge cylian/engram
-
-# SSE (network)
-docker run -p 8192:8192 -v ./knowledge:/knowledge cylian/engram --transport sse
-
-# HTTP
-docker run -p 8192:8192 -v ./knowledge:/knowledge cylian/engram --transport streamable-http
+docker pull cylian/engram:latest
 ```
 
-## Configuration
+### stdio (Claude Code, ChatGPT Desktop, Cursor, etc.)
 
-### Claude Code (stdio)
-
-Add to your Claude Code MCP configuration:
-
-```json
-{
-  "mcpServers": {
-    "kb": {
-      "command": "docker",
-      "args": ["run", "-i", "--rm", "-v", "./knowledge:/knowledge", "cylian/engram"]
-    }
-  }
-}
+```bash
+claude mcp add --transport stdio engram -- \
+  docker run -i --rm \
+  -v ./knowledge:/knowledge \
+  cylian/engram
 ```
 
-### SSE (network)
+### SSE (network — share KB across agents)
 
-Start the server, then configure your client:
-
-```json
-{
-  "mcpServers": {
-    "kb": {
-      "type": "sse",
-      "url": "http://127.0.0.1:8192/sse"
-    }
-  }
-}
+```bash
+docker run -d --name engram \
+  -p 8192:8192 \
+  -v ./knowledge:/knowledge \
+  cylian/engram --transport sse
 ```
+
+```bash
+claude mcp add --transport sse \
+  engram http://your-host:8192/sse
+```
+
+### HTTP (stateless — load-balanceable)
+
+```bash
+docker run -d --name engram \
+  -p 8192:8192 \
+  -v ./knowledge:/knowledge \
+  cylian/engram --transport streamable-http
+```
+
+## Search Backends
+
+Two backends ship out of the box. Switch with `--backend` or `ENGRAM_BACKEND`:
+
+| Backend | Default | Description |
+|---------|---------|-------------|
+| `xapian` | ✓ | Fast full-text search with configurable stemming |
+| `sqlite` | | SQLite FTS5 — query your index with standard SQL tools |
+
+The backend is pluggable: drop a `backend/{name}/main.py` with a `SearchBackend` subclass and it's available automatically.
 
 ## Tools
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
-| `remember` | Create or update an entry (upsert) | `title`, `content`, `tags`, `entry_id` (optional), `force` (optional) |
-| `recall` | Read full content of an entry with relations | `entry_id` |
-| `search` | Full-text search with optional tag filter | `query`, `tags` (optional), `limit` (optional) |
-| `list` | List entries sorted by title | `tags` (optional), `limit` (optional) |
-| `tags` | List all tags with entry counts | -- |
+| `remember` | Create or update an entry (upsert with duplicate detection) | `title`, `content`, `tags`, `entry_id`, `force` |
+| `recall` | Read an entry with its graph relations (outgoing + backlinks) | `entry_id` |
+| `search` | Full-text search with optional tag filter | `query`, `tags`, `limit` |
+| `list` | Browse entries sorted by title | `tags`, `limit` |
+| `tags` | List all tags with entry counts | — |
 | `forget` | Delete an entry (file and index) | `entry_id` |
-| `rebuild` | Rebuild the Xapian index from files | -- |
+| `rebuild` | Rebuild search index from Markdown files | — |
 
 ## Graph Relations
 
-Entries can reference each other using `kb://uuid#type` links in their Markdown content. The `#type` fragment defines the relation kind (e.g., `runs-on`, `depends-on`, `mirrors`). If omitted, it defaults to `related`.
-
-### Example content
+Link entries with `kb://uuid#type` URLs in Markdown content:
 
 ```markdown
-This service runs on [pmx-0102](kb://a1b2c3d4-e5f6-7890-abcd-ef1234567890#runs-on)
-and depends on [PostgreSQL](kb://f9e8d7c6-b5a4-3210-fedc-ba9876543210#depends-on).
+This service runs on [Saturn](kb://a1b2c3d4-...#runs-on)
+and depends on [PostgreSQL](kb://f9e8d7c6-...#depends-on).
 ```
 
-### What `recall` returns
+`recall` returns both directions:
 
-When you recall an entry, the `relations` field contains both directions:
+```json
+{
+  "id": "a1b2c3d4-...",
+  "title": "My API Service",
+  ...
+  "relations": {
+    "out": [{"type": "runs-on", "id": "e5f6...", "title": "Saturn"}],
+    "in": [{"type": "depends-on", "id": "b7c8...", "title": "Frontend App"}]
+  }
+}
+```
 
-- **`out`** -- outgoing links from this entry (e.g., `runs-on`, `depends-on`)
-- **`in`** -- incoming backlinks from other entries pointing here
+Like [HATEOAS](https://en.wikipedia.org/wiki/HATEOAS) for knowledge — every response carries the links to navigate the graph.
 
-Each relation includes `type`, `id`, and `title`.
+## Configuration
+
+All options have `ENGRAM_*` environment variable fallbacks. CLI args take priority.
+
+| Option | Env var | Default | Description |
+|--------|---------|---------|-------------|
+| `--data-path` | `ENGRAM_DATA_PATH` | `/knowledge` | Root path for knowledge data |
+| `--backend` | `ENGRAM_BACKEND` | `xapian` | Search backend |
+| `--language` | `ENGRAM_LANGUAGE` | `en` | Stemmer language |
+| `--transport` | `ENGRAM_TRANSPORT` | `stdio` | MCP transport |
+| `--host` | `ENGRAM_HOST` | `0.0.0.0` | Listen address (SSE/HTTP) |
+| `--port` | `ENGRAM_PORT` | `8192` | Listen port (SSE/HTTP) |
 
 ## Storage Format
 
-Entries are Markdown files with YAML frontmatter, stored in `<data-path>/entries/`:
+Entries are Markdown files with YAML frontmatter in `<data-path>/entries/`:
 
 ```yaml
 ---
@@ -103,30 +117,20 @@ tags: [infrastructure, postgresql]
 Markdown content here...
 ```
 
-The Xapian index lives in `<data-path>/index/fr/` and can be fully rebuilt from the Markdown files at any time using the `rebuild` tool.
-
-## CLI Options
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `--data-path` | `/knowledge` | Root path for knowledge data |
-| `--log-file` | stderr | Path to the log file |
-| `--transport` | `stdio` | MCP transport: `stdio`, `sse`, or `streamable-http` |
-| `--host` | `0.0.0.0` | Listen address for SSE/HTTP transport |
-| `--port` | `8192` | Listen port for SSE/HTTP transport |
+The search index is a rebuildable cache in `<data-path>/index/<backend>/`. Delete it and `rebuild` — no data is ever lost.
 
 ## Development
 
 ```bash
 # Install
 python3 -m venv .venv --system-site-packages
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install -r src/requirements.txt
 
-# Test
+# Test (89 tests, 90% coverage)
 .venv/bin/python -m pytest tests/ -v
 
 # Lint
-.venv/bin/python -m ruff check .
+.venv/bin/python -m ruff check src/ tests/
 ```
 
 ## License
