@@ -25,11 +25,11 @@
 
 ### Rôle
 
-KB est la **base de savoir principale** de Claude. Tout savoir opérationnel durable et réutilisable y est stocké.
+Engram est la **base de savoir principale** de Claude. Tout savoir opérationnel durable et réutilisable y est stocké.
 
 ### Alimentation
 
-- **Implicite** : Claude stocke automatiquement après un diagnostic, une procédure, une découverte infra, une décision d'architecture. Signalé brièvement : "→ KB: [titre]"
+- **Implicite** : Claude stocke automatiquement après un diagnostic, une procédure, une découverte infra, une décision d'architecture. Signalé brièvement : "→ Engram: [titre]"
 - **Explicite** : sur demande de l'utilisateur
 
 ### Granularité
@@ -60,8 +60,8 @@ Convention Markdown standard : `[Titre de l'article](kb://<uuid>)` dans le conte
 
 ### Frontière avec MEMORY.md
 
-| MEMORY.md | KB |
-|-----------|-----|
+| MEMORY.md | Engram |
+|-----------|--------|
 | Feedback comportemental | Savoir opérationnel |
 | Règles process | Procédures, diagnostics |
 | Références externes | Architecture, décisions techniques |
