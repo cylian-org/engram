@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.1
+
+- Added content policy to `remember` tool docstring (size limits, article structure guidelines)
+- Docs: renamed all "KB" references to "Engram" / "knowledge base" across README and CLAUDE.md
+
 ## 0.5.0
 
 - `recall` now returns `size` (bytes) and `last_modified` (date) fields
