@@ -32,7 +32,7 @@ from server import _create_backend, parse_args, register_tools, setup_logging
 
 @pytest.fixture()
 def _setup(tmp_path: Path) -> tuple[FastMCP, KnowledgeBase, logging.Logger]:
-    """Provide a FastMCP instance with tools registered against a temp KB."""
+    """Provide a FastMCP instance with tools registered against a temp Engram."""
 
     kb = KnowledgeBase(str(tmp_path))
     mcp = FastMCP(name="test")
@@ -138,7 +138,7 @@ class TestSearchEdgeCases:
         kb.remember("Entry B", "Beta content.", ["test"], force=True)
 
         # Use limit=0 — should be clamped to 1 by server, but here we
-        # test the KB directly (it accepts the value as-is)
+        # test the KnowledgeBase directly (it accepts the value as-is)
         results = kb.search("content", limit=1)
 
         # At most 1 result
