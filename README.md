@@ -17,7 +17,7 @@ claude mcp add --transport stdio engram -- \
 
 ### SSE
 
-Persistent server on the network. Share a KB across multiple agents.
+Persistent server on the network. Share knowledge across multiple agents.
 
 ```bash
 docker run -d --name engram \
