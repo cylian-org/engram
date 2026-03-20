@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.2
+
+- Docs: reinforced "zero discoverable information" principle in README.md, CLAUDE.md, and `remember` tool docstring (server.py)
+- Docs: stripped technical documentation from CLAUDE.md (9256bd7)
+
 ## 0.5.1
 
 - Added content policy to `remember` tool docstring (size limits, article structure guidelines)

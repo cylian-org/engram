@@ -228,10 +228,13 @@ def register_tools(
         cramming everything into a single entry. This keeps articles
         self-sufficient, searchable, and easy to update independently.
 
-        Content policy: Engram stores decisions and their context, not
-        technical documentation. If information is derivable from code,
-        git, or configuration files, it does not belong here. Write in
-        affirmative style: state what is, not what isn't.
+        Content policy: Engram stores ZERO discoverable information.
+        If information is derivable from code, git history, configuration
+        files, or existing documentation, it does not belong here. Engram
+        captures decisions and their context, diagnostics and their root
+        causes, procedures learned the hard way — the kind of knowledge
+        that is lost when a conversation ends. Write in affirmative style:
+        state what is, not what isn't.
 
         Content may contain links to other entries using the format
         [label](kb://uuid#type) where type is the relation kind (e.g.

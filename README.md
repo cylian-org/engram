@@ -131,6 +131,12 @@ Add this to your system prompt or project instructions to make your agent use En
 ```
 Engram is your persistent memory. Using it is mandatory, not optional.
 
+Engram stores ZERO discoverable information. If you can derive it from
+code, git history, configuration files, or existing documentation, it
+does not belong in Engram. Engram captures decisions and their context,
+diagnostics and their root causes, procedures learned the hard way —
+the kind of knowledge that is lost when a conversation ends.
+
 Before working on any topic: search Engram first. Always. Even if you think you know.
 Before answering a question about infrastructure or architecture: search first.
 Before proposing a solution: check if a past decision exists in Engram.

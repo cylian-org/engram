@@ -26,8 +26,11 @@ Engram est la **base de savoir principale** de Claude. Tout savoir opérationnel
 
 ### Quand NE PAS stocker
 
+Engram ne stocke **AUCUNE information découvrable**. Si l'information est dérivable du code, de git, de la configuration ou de la documentation existante, elle n'a rien à faire dans Engram.
+
 - Info déjà dans CLAUDE.md ou MEMORY.md
-- Info dérivable du code ou de git
+- Info dérivable du code, de git ou de la configuration
+- Structure de fichiers, signatures de fonctions, contenu de configs
 - Détails éphémères de la conversation en cours
 
 ### Frontière avec MEMORY.md
