@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.0
+
+- feat: `remember` docstring enforces one decision per article with optional justification
+- feat: structural warnings added — Markdown headers detection, paragraph count > 3
+- feat: size thresholds lowered to 512 B (soft warning) / 1 KB (hard warning)
+- Tests: 5 new tests covering the new structural and size checks
+
 ## 0.5.2
 
 - Docs: reinforced "zero discoverable information" principle in README.md, CLAUDE.md, and `remember` tool docstring (server.py)

@@ -378,6 +378,100 @@ def _call_tool(mcp: FastMCP, name: str, arguments: dict) -> dict:
     return asyncio.new_event_loop().run_until_complete(coro)
 
 
+class TestRememberAtomicityWarnings:
+    """Atomicity warnings for the remember tool."""
+
+    def test_remember_warns_on_headers(self, _setup: tuple) -> None:
+        """Content with Markdown headers triggers an atomicity warning."""
+
+        mcp, _kb, _logger = _setup
+
+        result = _call_tool(
+            mcp,
+            "remember",
+            {
+                "title": "Multi-section",
+                "content": "## Section A\nFoo.\n\n## Section B\nBar.",
+                "tags": ["test"],
+            },
+        )
+
+        assert "warnings" in result
+        assert any("headers" in w for w in result["warnings"])
+
+    def test_remember_warns_on_large_content(self, _setup: tuple) -> None:
+        """Content exceeding 512 bytes triggers a size warning."""
+
+        mcp, _kb, _logger = _setup
+
+        result = _call_tool(
+            mcp,
+            "remember",
+            {
+                "title": "Large article",
+                "content": "A" * 600,
+                "tags": ["test"],
+            },
+        )
+
+        assert "warnings" in result
+        assert any("512" in w for w in result["warnings"])
+
+    def test_remember_warns_on_very_large_content(self, _setup: tuple) -> None:
+        """Content exceeding 1024 bytes triggers a hard size warning."""
+
+        mcp, _kb, _logger = _setup
+
+        result = _call_tool(
+            mcp,
+            "remember",
+            {
+                "title": "Very large article",
+                "content": "B" * 1100,
+                "tags": ["test"],
+            },
+        )
+
+        assert "warnings" in result
+        assert any("1 KB" in w for w in result["warnings"])
+
+    def test_remember_warns_on_too_many_paragraphs(self, _setup: tuple) -> None:
+        """Content with more than 3 paragraphs triggers a warning."""
+
+        mcp, _kb, _logger = _setup
+
+        content = "First.\n\nSecond.\n\nThird.\n\nFourth."
+        result = _call_tool(
+            mcp,
+            "remember",
+            {
+                "title": "Multi-paragraph",
+                "content": content,
+                "tags": ["test"],
+            },
+        )
+
+        assert "warnings" in result
+        assert any("paragraphs" in w for w in result["warnings"])
+
+    def test_remember_no_warning_on_atomic_content(self, _setup: tuple) -> None:
+        """Short, atomic content produces no warnings."""
+
+        mcp, _kb, _logger = _setup
+
+        result = _call_tool(
+            mcp,
+            "remember",
+            {
+                "title": "Atomic fact",
+                "content": "Logs go to stderr. Simplifies the Dockerfile.",
+                "tags": ["test"],
+            },
+        )
+
+        assert "warnings" not in result
+
+
 class TestToolRememberViaMcp:
     """Test the remember tool through the MCP layer."""
 

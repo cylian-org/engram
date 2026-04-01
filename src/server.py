@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -222,11 +223,12 @@ def register_tools(
            - If no match -> create a new entry
         3. If force=True -> always create new (skip duplicate detection)
 
-        Best practice: prefer small, focused articles over large monolithic
-        ones. Each article should cover one complete, atomic piece of
-        knowledge. Use links to connect related articles rather than
-        cramming everything into a single entry. This keeps articles
-        self-sufficient, searchable, and easy to update independently.
+        Atomicity rule: each article MUST contain exactly one piece of
+        knowledge — a single decision, fact, or procedure. The content
+        should be one sentence stating the decision, plus an optional
+        short justification. No Markdown headers, no multi-section
+        documents. If you have multiple decisions, create multiple
+        articles and link them with kb:// references.
 
         Content policy: Engram stores ZERO discoverable information.
         If information is derivable from code, git history, configuration
@@ -262,20 +264,41 @@ def register_tools(
 
         result = kb.remember(title, content, tags, entry_id=entry_id, force=force)
 
-        # Add size metadata and warnings
+        # Add size metadata and atomicity warnings
         if "error" not in result:
             content_size = len(content.encode("utf-8"))
             result["size"] = content_size
 
             warnings = []
-            if content_size > 4096:
+
+            # Atomicity: no Markdown headers in content
+            if re.search(r"^#{1,6} ", content, re.MULTILINE):
                 warnings.append(
-                    f"Article is {content_size / 1024:.1f} KB — exceeds 4 KB limit. "
-                    "Consider splitting into smaller articles."
+                    "Article contains Markdown headers — each article "
+                    "should be a single atomic fact. Split into separate "
+                    "articles linked with kb:// references."
                 )
-            elif content_size > 2048:
+
+            # Atomicity: too many paragraphs suggests multiple topics
+            paragraphs = [
+                p for p in content.split("\n\n") if p.strip()
+            ]
+            if len(paragraphs) > 3:
                 warnings.append(
-                    f"Article is {content_size / 1024:.1f} KB — exceeds 2 KB target."
+                    f"Article has {len(paragraphs)} paragraphs — "
+                    "an atomic article should have one decision sentence "
+                    "plus an optional justification."
+                )
+
+            # Size thresholds
+            if content_size > 1024:
+                warnings.append(
+                    f"Article is {content_size} bytes — exceeds 1 KB limit. "
+                    "An atomic article should be much shorter."
+                )
+            elif content_size > 512:
+                warnings.append(
+                    f"Article is {content_size} bytes — exceeds 512 B target."
                 )
 
             if warnings:
